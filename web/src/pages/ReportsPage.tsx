@@ -76,7 +76,6 @@ export default function ReportsPage() {
 
   // Group by directory for display
   const grouped = reports.reduce<Record<string, ReportFile[]>>((acc, r) => {
-    const label = r.dir.replace(/^.*\//, "~/…/") + "/" + r.dir.split("/").pop();
     // Use just the last two path segments
     const parts = r.dir.replace(/\/$/, "").split("/");
     const key = parts.slice(-2).join("/");

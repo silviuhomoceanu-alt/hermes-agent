@@ -141,6 +141,13 @@ def _has_valid_session_token(request: Request) -> bool:
     ):
         return True
 
+    query_token = request.query_params.get("token", "")
+    if query_token and hmac.compare_digest(
+        query_token.encode(),
+        _SESSION_TOKEN.encode(),
+    ):
+        return True
+
     auth = request.headers.get("authorization", "")
     expected = f"Bearer {_SESSION_TOKEN}"
     return hmac.compare_digest(auth.encode(), expected.encode())
@@ -2611,6 +2618,146 @@ async def get_logs(
         needle = search.lower()
         result = [l for l in result if needle in l.lower()][-min(lines, 500):]
     return {"file": file, "lines": result}
+
+
+# ---------------------------------------------------------------------------
+# Reports and dashboard chat attachments
+# ---------------------------------------------------------------------------
+
+_REPORT_EXTENSIONS = {
+    ".html", ".htm", ".pdf", ".csv", ".xlsx", ".png", ".svg", ".txt", ".md"
+}
+_REPORT_DIR_NAMES = ("Downloads", ".hermes/outputs", ".hermes/uploads", ".hermes/reports")
+_ALLOWED_UPLOAD_MIMES = {
+    "application/pdf",
+    "application/msword",
+    "application/rtf",
+    "application/epub+zip",
+    "application/json",
+    "application/octet-stream",
+    "application/vnd.apache.parquet",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+_ALLOWED_UPLOAD_EXTENSIONS = {
+    ".txt", ".md", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".rtf", ".epub",
+    ".parquet", ".arrow", ".feather", ".avro", ".db", ".sqlite", ".sqlite3", ".pkl", ".pickle",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic",
+}
+
+
+def _report_roots() -> List[Path]:
+    home = Path.home()
+    hermes_home = get_hermes_home()
+    return [
+        home / "Downloads",
+        hermes_home / "outputs",
+        hermes_home / "uploads",
+        hermes_home / "reports",
+    ]
+
+
+def _is_allowed_report_path(path: Path) -> bool:
+    try:
+        resolved = path.expanduser().resolve()
+    except Exception:
+        return False
+    for root in _report_roots():
+        try:
+            resolved.relative_to(root.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+@app.get("/api/reports")
+async def get_reports():
+    reports: List[Dict[str, Any]] = []
+    for root in _report_roots():
+        if not root.exists():
+            continue
+        for item in root.glob("*"):
+            if not item.is_file():
+                continue
+            ext = item.suffix.lower()
+            if ext not in _REPORT_EXTENSIONS:
+                continue
+            try:
+                st = item.stat()
+            except OSError:
+                continue
+            reports.append({
+                "name": item.name,
+                "path": str(item.resolve()),
+                "dir": str(root.resolve()),
+                "ext": ext.lstrip("."),
+                "size_bytes": st.st_size,
+                "modified": st.st_mtime,
+            })
+    reports.sort(key=lambda r: r["modified"], reverse=True)
+    return {"reports": reports}
+
+
+@app.get("/api/reports/download")
+async def download_report(path: str, download: bool = False):
+    target = Path(path)
+    if not _is_allowed_report_path(target):
+        raise HTTPException(status_code=403, detail="Path is not in an allowed report directory")
+    target = target.resolve()
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Report not found")
+    kwargs: Dict[str, Any] = {"filename": target.name, "media_type": "application/octet-stream"}
+    if download:
+        kwargs["content_disposition_type"] = "attachment"
+    return FileResponse(target, **kwargs)
+
+
+@app.post("/api/chat/upload-file")
+async def upload_chat_file(request: Request) -> JSONResponse:
+    try:
+        form = await request.form(max_part_size=25 * 1024 * 1024)
+    except TypeError:
+        form = await request.form()
+    file_field = form.get("file")
+    if file_field is None or not hasattr(file_field, "read"):
+        raise HTTPException(status_code=400, detail="Missing file field")
+
+    filename = Path(getattr(file_field, "filename", "attachment") or "attachment").name
+    ext = Path(filename).suffix.lower()
+    content_type = (getattr(file_field, "content_type", None) or "application/octet-stream").lower()
+    is_image = content_type.startswith("image/") or ext in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic"}
+    is_document = content_type.startswith("text/") or content_type in _ALLOWED_UPLOAD_MIMES or ext in _ALLOWED_UPLOAD_EXTENSIONS
+    if not (is_image or is_document):
+        raise HTTPException(status_code=415, detail=f"Unsupported file type: {content_type or ext}")
+
+    raw = await file_field.read()
+    max_size = 20 * 1024 * 1024
+    if len(raw) > max_size:
+        raise HTTPException(status_code=413, detail="File is larger than 20 MB")
+
+    upload_dir = get_hermes_home() / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    cutoff = time.time() - 2 * 60 * 60
+    for old in upload_dir.iterdir():
+        try:
+            if old.is_file() and old.stat().st_mtime < cutoff:
+                old.unlink()
+        except OSError:
+            pass
+
+    prefix = "img" if is_image else "doc"
+    safe_ext = ext if ext and len(ext) <= 16 else ""
+    dest = upload_dir / f"{prefix}-{secrets.token_hex(8)}{safe_ext}"
+    dest.write_bytes(raw)
+    return JSONResponse({
+        "path": str(dest.resolve()),
+        "filename": filename,
+        "file_type": "image" if is_image else "document",
+    })
 
 
 # ---------------------------------------------------------------------------

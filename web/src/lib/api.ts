@@ -246,6 +246,21 @@ export const api = {
     if (params.component && params.component !== "all") qs.set("component", params.component);
     return fetchJSON<LogsResponse>(`/api/logs?${qs.toString()}`);
   },
+  getReports: () => fetchJSON<ReportsResponse>("/api/reports"),
+  getReportDownloadUrl: (path: string) => {
+    const qs = new URLSearchParams({ path });
+    const token = window.__HERMES_SESSION_TOKEN__;
+    if (token) qs.set("token", token);
+    return `${BASE}/api/reports/download?${qs.toString()}`;
+  },
+  uploadChatFile: async (file: File): Promise<ChatFileUploadResponse> => {
+    const form = new FormData();
+    form.append("file", file);
+    return fetchJSON<ChatFileUploadResponse>("/api/chat/upload-file", {
+      method: "POST",
+      body: form,
+    });
+  },
   getAnalytics: (days: number) =>
     fetchJSON<AnalyticsResponse>(`/api/analytics/usage?days=${days}`),
   getModelsAnalytics: (days: number) =>
@@ -641,6 +656,25 @@ export interface SessionMessagesResponse {
 export interface LogsResponse {
   file: string;
   lines: string[];
+}
+
+export interface ReportFile {
+  name: string;
+  path: string;
+  dir: string;
+  ext: string;
+  size_bytes: number;
+  modified: number;
+}
+
+export interface ReportsResponse {
+  reports: ReportFile[];
+}
+
+export interface ChatFileUploadResponse {
+  path: string;
+  filename: string;
+  file_type: "image" | "document";
 }
 
 export interface AnalyticsDailyEntry {

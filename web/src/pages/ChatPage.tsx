@@ -26,12 +26,13 @@ import { Button } from "@nous-research/ui/ui/components/button";
 import { Typography } from "@nous-research/ui/ui/components/typography/index";
 import { HERMES_BASE_PATH, buildWsAuthParam } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { Copy, PanelRight, X } from "lucide-react";
+import { Copy, Paperclip, PanelRight, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
 
 import { ChatSidebar } from "@/components/ChatSidebar";
+import { AttachmentBar, type StagedAttachment } from "@/components/AttachmentBar";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
@@ -131,6 +132,10 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   );
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const attachmentsRef = useRef<StagedAttachment[]>([]);
+  const stageFilesRef = useRef<(files: File[]) => void>(() => {});
+  const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
   // Raw state for the mobile side-sheet + a derived value that force-
   // closes whenever the chat tab isn't active.  The *derived* value is
   // what side-effects (body-scroll lock, keydown listener, portal render)
@@ -253,6 +258,79 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     );
     return () => setEnd(null);
   }, [isActive, narrow, mobilePanelOpen, modelToolsLabel, setEnd]);
+
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => {
+      const doomed = prev.find((att) => att.id === id);
+      if (doomed?.previewUrl) URL.revokeObjectURL(doomed.previewUrl);
+      return prev.filter((att) => att.id !== id);
+    });
+  }, []);
+
+  const stageFiles = useCallback((files: File[]) => {
+    for (const file of files) {
+      const id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `att-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+      const isImage = file.type.startsWith("image/");
+      const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
+      const staged: StagedAttachment = {
+        id,
+        filename: file.name || "attachment",
+        previewUrl,
+        type: isImage ? "image" : "document",
+        status: "uploading",
+      };
+      setAttachments((prev) => [...prev, staged]);
+      api
+        .uploadChatFile(file)
+        .then((res) => {
+          setAttachments((prev) =>
+            prev.map((att) =>
+              att.id === id
+                ? {
+                    ...att,
+                    type: res.file_type,
+                    status: "ready",
+                    serverPath: res.path,
+                  }
+                : att,
+            ),
+          );
+        })
+        .catch((err) => {
+          console.warn("[hermes-chat] file upload failed:", err);
+          setAttachments((prev) =>
+            prev.map((att) =>
+              att.id === id ? { ...att, status: "error" } : att,
+            ),
+          );
+        });
+    }
+  }, []);
+
+  useEffect(() => {
+    stageFilesRef.current = stageFiles;
+  }, [stageFiles]);
+
+  useEffect(() => {
+    return () => {
+      for (const att of attachmentsRef.current) {
+        if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
+      }
+    };
+  }, [channel]);
+
+  const handleFileInput = useCallback((ev: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(ev.target.files ?? []);
+    if (files.length > 0) stageFiles(files);
+    ev.target.value = "";
+  }, [stageFiles]);
 
   const handleCopyLast = () => {
     const ws = wsRef.current;
@@ -394,15 +472,53 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         // (or the bare ev if the user used a different modifier).
       }
 
-      if (pasteModifier && ev.key.toLowerCase() === "v") {
-        navigator.clipboard
-          .readText()
-          .then((text) => {
-            if (text) term.paste(text);
-          })
-          .catch((err) => {
-            console.warn("[dashboard clipboard] paste failed:", err.message);
+      if (ev.key === "Enter") {
+        const ready = attachmentsRef.current.filter(
+          (att) => att.status === "ready" && att.serverPath,
+        );
+        if (ready.length > 0) {
+          term.paste(ready.map((att) => att.serverPath).join(" "));
+          setAttachments((prev) => {
+            for (const att of prev) {
+              if (ready.some((r) => r.id === att.id) && att.previewUrl) {
+                URL.revokeObjectURL(att.previewUrl);
+              }
+            }
+            return prev.filter((att) => !ready.some((r) => r.id === att.id));
           });
+          setTimeout(() => term.input("\r"), 300);
+          ev.preventDefault();
+          return false;
+        }
+      }
+
+      if (pasteModifier && ev.key.toLowerCase() === "v") {
+        void (async () => {
+          try {
+            if (navigator.clipboard.read) {
+              const items = await navigator.clipboard.read();
+              const imageFiles: File[] = [];
+              for (const item of items) {
+                const imageType = item.types.find((type) => type.startsWith("image/"));
+                if (!imageType) continue;
+                const blob = await item.getType(imageType);
+                const ext = imageType.split("/")[1] || "png";
+                imageFiles.push(new File([blob], `clipboard-image.${ext}`, { type: imageType }));
+              }
+              if (imageFiles.length > 0) {
+                stageFilesRef.current(imageFiles);
+                return;
+              }
+            }
+            const text = await navigator.clipboard.readText();
+            if (text) term.paste(text);
+          } catch (err) {
+            console.warn(
+              "[dashboard clipboard] paste failed:",
+              err instanceof Error ? err.message : String(err),
+            );
+          }
+        })();
         ev.preventDefault();
         return false;
       }
@@ -837,30 +953,60 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
             className="hermes-chat-xterm-host min-h-0 min-w-0 flex-1"
           />
 
-          <Button
-            ghost
-            onClick={handleCopyLast}
-            title="Copy last assistant response as raw markdown"
-            aria-label="Copy last assistant response"
-            className={cn(
-              "absolute z-10",
-              "normal-case tracking-normal font-normal",
-              "rounded border border-current/30",
-              "bg-black/20 backdrop-blur-sm",
-              "opacity-70 hover:opacity-100 hover:border-current/60",
-              "transition-opacity duration-150",
-              "bottom-2 right-2 px-2 py-1 text-xs sm:bottom-3 sm:right-3 sm:px-2.5 sm:py-1.5",
-              "lg:bottom-4 lg:right-4",
-            )}
-            style={{ color: TERMINAL_THEME.foreground }}
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <Copy className="h-3 w-3 shrink-0" />
-              <span className="hidden min-[400px]:inline tracking-wide">
-                {copyState === "copied" ? "copied" : "copy last response"}
+          <div className="flex shrink-0 items-center gap-2 pt-1.5">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleFileInput}
+            />
+            <Button
+              ghost
+              onClick={() => fileInputRef.current?.click()}
+              title="Attach file to next message"
+              aria-label="Attach file"
+              className={cn(
+                "shrink-0 normal-case tracking-normal font-normal",
+                "rounded border border-current/30",
+                "bg-black/20 backdrop-blur-sm",
+                "opacity-70 hover:opacity-100 hover:border-current/60",
+                "px-2 py-1 text-xs sm:px-2.5 sm:py-1.5",
+              )}
+              style={{ color: TERMINAL_THEME.foreground }}
+            >
+              <Paperclip className="h-3 w-3 shrink-0" />
+            </Button>
+
+            <AttachmentBar
+              attachments={attachments}
+              onRemove={removeAttachment}
+              className="min-w-0 flex-1 px-0 pt-0"
+            />
+
+            <Button
+              ghost
+              onClick={handleCopyLast}
+              title="Copy last assistant response as raw markdown"
+              aria-label="Copy last assistant response"
+              className={cn(
+                "shrink-0 normal-case tracking-normal font-normal",
+                "rounded border border-current/30",
+                "bg-black/20 backdrop-blur-sm",
+                "opacity-70 hover:opacity-100 hover:border-current/60",
+                "transition-opacity duration-150",
+                "px-2 py-1 text-xs sm:px-2.5 sm:py-1.5",
+              )}
+              style={{ color: TERMINAL_THEME.foreground }}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <Copy className="h-3 w-3 shrink-0" />
+                <span className="hidden min-[400px]:inline tracking-wide">
+                  {copyState === "copied" ? "copied" : "copy last response"}
+                </span>
               </span>
-            </span>
-          </Button>
+            </Button>
+          </div>
         </div>
 
         {!narrow && (
