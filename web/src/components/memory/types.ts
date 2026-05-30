@@ -2,6 +2,17 @@ import type { MemoryEdge, MemoryNode } from "@/lib/api";
 
 export type SourceFilter = "all" | "hermes" | "honcho" | "wiki";
 export type GraphMode = "global" | "local";
+export type NodeLabelDensity = "minimal" | "balanced" | "dense";
+
+export type GraphDensitySettings = {
+  maxNodes: number;
+  localDepth: number;
+  includeDerivedEdges: boolean;
+  includeRawSources: boolean;
+  includeMessages: boolean;
+  nodeLabelDensity: NodeLabelDensity;
+  showEdgeLabels: boolean;
+};
 
 export type GraphNode = MemoryNode & {
   x?: number;
@@ -10,6 +21,7 @@ export type GraphNode = MemoryNode & {
   vy?: number;
   val?: number;
   color?: string;
+  visibleDegree?: number;
 };
 
 export type GraphLink = {

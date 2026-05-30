@@ -2,7 +2,7 @@ import { GitBranch } from "lucide-react";
 import type { MemoryProfileInfo } from "@/lib/api";
 import { SOURCE_COLORS, SOURCE_LABELS } from "./constants";
 import { MemoryGraphSettings } from "./MemoryGraphSettings";
-import type { GraphMode, SourceFilter } from "./types";
+import type { GraphDensitySettings, GraphMode, SourceFilter } from "./types";
 
 interface MemorySourceSidebarProps {
   profiles: MemoryProfileInfo[];
@@ -12,8 +12,8 @@ interface MemorySourceSidebarProps {
   onSourceFilterChange: (source: SourceFilter) => void;
   mode: GraphMode;
   onModeChange: (mode: GraphMode) => void;
-  includeMessages: boolean;
-  onIncludeMessagesChange: (include: boolean) => void;
+  densitySettings: GraphDensitySettings;
+  onDensitySettingsChange: (settings: GraphDensitySettings) => void;
 }
 
 export function MemorySourceSidebar({
@@ -24,8 +24,8 @@ export function MemorySourceSidebar({
   onSourceFilterChange,
   mode,
   onModeChange,
-  includeMessages,
-  onIncludeMessagesChange,
+  densitySettings,
+  onDensitySettingsChange,
 }: MemorySourceSidebarProps) {
   return (
     <aside className="rounded border border-current/10 bg-background/45 p-3">
@@ -61,8 +61,8 @@ export function MemorySourceSidebar({
       <MemoryGraphSettings
         mode={mode}
         onModeChange={onModeChange}
-        includeMessages={includeMessages}
-        onIncludeMessagesChange={onIncludeMessagesChange}
+        settings={densitySettings}
+        onSettingsChange={onDensitySettingsChange}
       />
 
       <div className="mt-6 space-y-2 text-xs text-foreground/45">

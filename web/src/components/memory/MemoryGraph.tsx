@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
 import { Database } from "lucide-react";
 import { SOURCE_COLORS } from "./constants";
-import type { GraphLink, GraphNode, VisibleMemoryGraph } from "./types";
+import type { GraphLink, GraphNode, NodeLabelDensity, VisibleMemoryGraph } from "./types";
 
 interface MemoryGraphProps {
   graphData: VisibleMemoryGraph;
@@ -10,12 +10,16 @@ interface MemoryGraphProps {
   selectedNodeId: string | null;
   focusedNodeRevision: number;
   hoveredNodeId: string | null;
+  nodeLabelDensity: NodeLabelDensity;
+  showEdgeLabels: boolean;
+  totalNodeCount: number;
+  totalEdgeCount: number;
   onNodeSelect: (id: string) => void;
   onNodeHover: (id: string | null) => void;
   children?: React.ReactNode;
 }
 
-export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRevision, hoveredNodeId, onNodeSelect, onNodeHover, children }: MemoryGraphProps) {
+export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRevision, hoveredNodeId, nodeLabelDensity, showEdgeLabels, totalNodeCount, totalEdgeCount, onNodeSelect, onNodeHover, children }: MemoryGraphProps) {
   const graphRef = useRef<ForceGraphMethods<GraphNode, GraphLink> | undefined>(undefined);
   const graphHostRef = useRef<HTMLElement | null>(null);
   const [graphSize, setGraphSize] = useState({ width: 0, height: 0 });
@@ -86,6 +90,27 @@ export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRev
           linkWidth={(link) => (link.kind === "wikilink" || link.kind === "contains" ? 1.1 : 0.6)}
           linkDirectionalParticles={(link) => (link.kind === "wikilink" ? 1 : 0)}
           linkDirectionalParticleWidth={1.4}
+          linkCanvasObjectMode={() => (showEdgeLabels ? "after" : undefined)}
+          linkCanvasObject={(link, ctx, globalScale) => {
+            if (!showEdgeLabels) return;
+            const source = typeof link.source === "string" ? null : link.source;
+            const target = typeof link.target === "string" ? null : link.target;
+            if (!source || !target || typeof source.x !== "number" || typeof source.y !== "number" || typeof target.x !== "number" || typeof target.y !== "number") return;
+            const x = (source.x + target.x) / 2;
+            const y = (source.y + target.y) / 2;
+            const fontSize = Math.max(7, 10 / globalScale);
+            const label = link.kind.replace(/_/g, " ");
+            ctx.font = `500 ${fontSize}px Inter, system-ui, sans-serif`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            const metrics = ctx.measureText(label);
+            const padX = 3 / globalScale;
+            const padY = 2 / globalScale;
+            ctx.fillStyle = "rgba(2, 6, 23, 0.72)";
+            ctx.fillRect(x - metrics.width / 2 - padX, y - fontSize / 2 - padY, metrics.width + padX * 2, fontSize + padY * 2);
+            ctx.fillStyle = "rgba(226, 232, 240, 0.78)";
+            ctx.fillText(label, x, y);
+          }}
           onNodeClick={(node) => onNodeSelect(node.id)}
           onNodeHover={(node) => {
             onNodeHover(node?.id ?? null);
@@ -96,7 +121,7 @@ export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRev
             const isSelected = node.id === selectedNodeId;
             const isHovered = node.id === hoveredNodeId;
             const isAnchor = node.kind === "profile" || node.kind === "wiki_root" || node.kind === "honcho_workspace";
-            const shouldLabel = isSelected || isHovered || isAnchor || globalScale > 2.1;
+            const shouldLabel = isSelected || isHovered || (nodeLabelDensity === "balanced" && (isAnchor || globalScale > 2.1)) || (nodeLabelDensity === "minimal" && (isAnchor || globalScale > 3.2)) || (nodeLabelDensity === "dense" && (isAnchor || globalScale > 1.15 || (node.visibleDegree ?? 0) >= 3));
             const x = node.x ?? 0;
             const y = node.y ?? 0;
 
@@ -139,7 +164,7 @@ export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRev
         <div className="absolute right-3 top-16 z-10 max-h-64 w-[min(26rem,calc(100%-1.5rem))] overflow-auto rounded border border-current/10 bg-background/90 p-2 shadow-xl backdrop-blur">
           <div className="mb-1.5 flex items-center justify-between gap-2 px-1 text-[0.65rem] uppercase tracking-widest text-foreground/40">
             <span>Nodes</span>
-            <span>{graphData.nodes.length}</span>
+            <span>{graphData.nodes.length}/{totalNodeCount} · {graphData.links.length}/{totalEdgeCount} edges</span>
           </div>
           <div className="grid gap-1 sm:grid-cols-2">
             {graphData.nodes.map((node) => (
