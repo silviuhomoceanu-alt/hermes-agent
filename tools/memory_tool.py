@@ -440,6 +440,90 @@ class MemoryStore:
 
         return self._success_response(target, "Entry removed.")
 
+    def replace_at(self, target: str, index: int, expected_old_content: str, new_content: str) -> Dict[str, Any]:
+        """Replace an entry by exact index + expected content.
+
+        Dashboard/editor APIs expose entry IDs, not substring search. This method
+        preserves the same locking, drift detection, threat scanning, character
+        limit, and persistence semantics as replace(), while avoiding ambiguous
+        substring matches between entries.
+        """
+        expected_old_content = expected_old_content.strip()
+        new_content = new_content.strip()
+        if index < 0:
+            return {"success": False, "error": "index cannot be negative."}
+        if not expected_old_content:
+            return {"success": False, "error": "expected_old_content cannot be empty."}
+        if not new_content:
+            return {"success": False, "error": "new_content cannot be empty. Use 'remove' to delete entries."}
+
+        scan_error = _scan_memory_content(new_content)
+        if scan_error:
+            return {"success": False, "error": scan_error}
+
+        with self._file_lock(self._path_for(target)):
+            bak = self._reload_target(target)
+            if bak:
+                return _drift_error(self._path_for(target), bak)
+
+            entries = self._entries_for(target)
+            if index >= len(entries):
+                return {"success": False, "error": "Entry id is stale or invalid."}
+            if entries[index] != expected_old_content:
+                return {
+                    "success": False,
+                    "error": "Entry changed since it was loaded. Refresh and retry.",
+                    "currentContent": entries[index],
+                }
+
+            limit = self._char_limit(target)
+            test_entries = entries.copy()
+            test_entries[index] = new_content
+            new_total = len(ENTRY_DELIMITER.join(test_entries))
+            if new_total > limit:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Replacement would put memory at {new_total:,}/{limit:,} chars. "
+                        f"Shorten the new content or remove other entries first."
+                    ),
+                }
+
+            entries[index] = new_content
+            self._set_entries(target, entries)
+            self.save_to_disk(target)
+
+        return self._success_response(target, "Entry replaced.")
+
+    def remove_at(self, target: str, index: int, expected_old_content: str) -> Dict[str, Any]:
+        """Remove an entry by exact index + expected content."""
+        expected_old_content = expected_old_content.strip()
+        if index < 0:
+            return {"success": False, "error": "index cannot be negative."}
+        if not expected_old_content:
+            return {"success": False, "error": "expected_old_content cannot be empty."}
+
+        with self._file_lock(self._path_for(target)):
+            bak = self._reload_target(target)
+            if bak:
+                return _drift_error(self._path_for(target), bak)
+
+            entries = self._entries_for(target)
+            if index >= len(entries):
+                return {"success": False, "error": "Entry id is stale or invalid."}
+            if entries[index] != expected_old_content:
+                return {
+                    "success": False,
+                    "error": "Entry changed since it was loaded. Refresh and retry.",
+                    "currentContent": entries[index],
+                }
+
+            entries.pop(index)
+            self._set_entries(target, entries)
+            self.save_to_disk(target)
+
+        return self._success_response(target, "Entry removed.")
+
     def format_for_system_prompt(self, target: str) -> Optional[str]:
         """
         Return the frozen snapshot for system prompt injection.

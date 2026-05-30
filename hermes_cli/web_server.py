@@ -2713,6 +2713,79 @@ async def search_memory(q: str, profiles: str = "all", limit: int = 50):
     return {"results": MemoryWorkbench().search(q, profiles=profiles, limit=safe_limit)}
 
 
+class AddHermesMemoryRequest(BaseModel):
+    profile: str = "default"
+    target: str
+    content: str
+
+
+class UpdateHermesMemoryRequest(BaseModel):
+    content: str
+    expectedOldContent: str
+
+
+class DeleteHermesMemoryRequest(BaseModel):
+    expectedOldContent: Optional[str] = None
+
+
+def _memory_error(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/memory/hermes")
+async def get_hermes_memory(profile: str = "default"):
+    from hermes_cli.hermes_hot_memory import HermesHotMemory
+
+    try:
+        return HermesHotMemory().read(profile)
+    except ValueError as exc:
+        raise _memory_error(exc)
+
+
+@app.post("/api/memory/hermes")
+async def add_hermes_memory(request: AddHermesMemoryRequest):
+    from hermes_cli.hermes_hot_memory import HermesHotMemory
+
+    try:
+        result = HermesHotMemory().add(request.profile, request.target, request.content)
+    except ValueError as exc:
+        raise _memory_error(exc)
+    if not result.get("success", False):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.put("/api/memory/hermes/{profile}/{target}/{entry_id}")
+async def update_hermes_memory(profile: str, target: str, entry_id: str, request: UpdateHermesMemoryRequest):
+    from hermes_cli.hermes_hot_memory import HermesHotMemory
+
+    try:
+        result = HermesHotMemory().replace(profile, target, entry_id, request.expectedOldContent, request.content)
+    except ValueError as exc:
+        raise _memory_error(exc)
+    if not result.get("success", False):
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
+@app.delete("/api/memory/hermes/{profile}/{target}/{entry_id}")
+async def delete_hermes_memory(profile: str, target: str, entry_id: str, request: Optional[DeleteHermesMemoryRequest] = None):
+    from hermes_cli.hermes_hot_memory import HermesHotMemory
+
+    try:
+        result = HermesHotMemory().remove(
+            profile,
+            target,
+            entry_id,
+            request.expectedOldContent if request is not None else None,
+        )
+    except ValueError as exc:
+        raise _memory_error(exc)
+    if not result.get("success", False):
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
 @app.get("/api/reports")
 async def get_reports():
     reports: List[Dict[str, Any]] = []

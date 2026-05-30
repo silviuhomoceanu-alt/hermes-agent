@@ -264,6 +264,32 @@ export const api = {
     if (params.limit) qs.set("limit", String(params.limit));
     return fetchJSON<MemorySearchResponse>(`/api/memory/search?${qs.toString()}`);
   },
+  getHermesMemory: (profile = "default") =>
+    fetchJSON<HermesMemoryResponse>(`/api/memory/hermes?profile=${encodeURIComponent(profile)}`),
+  addHermesMemory: (body: AddHermesMemoryRequest) =>
+    fetchJSON<HermesMemoryWriteResponse>("/api/memory/hermes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateHermesMemory: (profile: string, target: HermesMemoryTarget, entryId: string, body: UpdateHermesMemoryRequest) =>
+    fetchJSON<HermesMemoryWriteResponse>(
+      `/api/memory/hermes/${encodeURIComponent(profile)}/${encodeURIComponent(target)}/${encodeURIComponent(entryId)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
+  deleteHermesMemory: (profile: string, target: HermesMemoryTarget, entryId: string, body: DeleteHermesMemoryRequest = {}) =>
+    fetchJSON<HermesMemoryWriteResponse>(
+      `/api/memory/hermes/${encodeURIComponent(profile)}/${encodeURIComponent(target)}/${encodeURIComponent(entryId)}`,
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
   getReportDownloadUrl: (path: string) => {
     const qs = new URLSearchParams({ path });
     const token = window.__HERMES_SESSION_TOKEN__;
@@ -981,6 +1007,56 @@ export interface MemorySearchResult {
 
 export interface MemorySearchResponse {
   results: MemorySearchResult[];
+}
+
+export type HermesMemoryTarget = "user" | "memory";
+
+export interface HermesMemoryEntry {
+  id: string;
+  index: number;
+  content: string;
+  editable: true;
+}
+
+export interface HermesMemoryStore {
+  target: HermesMemoryTarget;
+  path: string;
+  charLimit: number;
+  usedChars: number;
+  entries: HermesMemoryEntry[];
+}
+
+export interface HermesMemoryResponse {
+  profile: string;
+  stores: HermesMemoryStore[];
+  warnings: string[];
+}
+
+export interface AddHermesMemoryRequest {
+  profile: string;
+  target: HermesMemoryTarget;
+  content: string;
+}
+
+export interface UpdateHermesMemoryRequest {
+  content: string;
+  expectedOldContent: string;
+}
+
+export interface DeleteHermesMemoryRequest {
+  expectedOldContent?: string;
+}
+
+export interface HermesMemoryWriteResponse {
+  profile: string;
+  success: boolean;
+  target?: HermesMemoryTarget;
+  entries?: string[];
+  usage?: string;
+  entry_count?: number;
+  message?: string;
+  error?: string;
+  [key: string]: unknown;
 }
 
 // ── OAuth provider types ────────────────────────────────────────────────
