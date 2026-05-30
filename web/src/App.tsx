@@ -20,6 +20,7 @@ import {
   Activity,
   BarChart3,
   BookOpen,
+  BrainCircuit,
   Clock,
   Code,
   Cpu,
@@ -73,6 +74,7 @@ import ProfilesPage from "@/pages/ProfilesPage";
 import SkillsPage from "@/pages/SkillsPage";
 import PluginsPage from "@/pages/PluginsPage";
 import ChatPage from "@/pages/ChatPage";
+import MemoryPage from "@/pages/MemoryPage";
 import ReportsPage from "@/pages/ReportsPage";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
@@ -119,6 +121,7 @@ const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/analytics": AnalyticsPage,
   "/models": ModelsPage,
   "/logs": LogsPage,
+  "/memory": MemoryPage,
   "/reports": ReportsPage,
   "/cron": CronPage,
   "/skills": SkillsPage,
@@ -157,6 +160,7 @@ const BUILTIN_NAV_REST: NavItem[] = [
     icon: Cpu,
   },
   { path: "/logs", labelKey: "logs", label: "Logs", icon: FileText },
+  { path: "/memory", label: "Memory", icon: BrainCircuit },
   { path: "/reports", label: "Download", icon: Download },
   { path: "/cron", labelKey: "cron", label: "Cron", icon: Clock },
   { path: "/skills", labelKey: "skills", label: "Skills", icon: Package },
@@ -175,6 +179,7 @@ const BUILTIN_NAV_REST: NavItem[] = [
 const ICON_MAP: Record<string, ComponentType<{ className?: string }>> = {
   Activity,
   BarChart3,
+  BrainCircuit,
   Clock,
   Cpu,
   FileText,

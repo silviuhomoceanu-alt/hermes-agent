@@ -2674,6 +2674,45 @@ def _is_allowed_report_path(path: Path) -> bool:
     return False
 
 
+@app.get("/api/memory/profiles")
+async def get_memory_profiles():
+    from hermes_cli.memory_workbench import MemoryWorkbench
+
+    return {"profiles": MemoryWorkbench().list_profiles()}
+
+
+@app.get("/api/memory/overview")
+async def get_memory_overview():
+    from hermes_cli.memory_workbench import MemoryWorkbench
+
+    return MemoryWorkbench().build_overview()
+
+
+@app.get("/api/memory/graph")
+async def get_memory_graph(
+    profiles: str = "all",
+    includeMessages: bool = False,
+    includeRawSources: bool = True,
+    includeDerivedEdges: bool = True,
+):
+    from hermes_cli.memory_workbench import MemoryWorkbench
+
+    return MemoryWorkbench().build_graph(
+        profiles=profiles,
+        include_messages=includeMessages,
+        include_raw_sources=includeRawSources,
+        include_derived_edges=includeDerivedEdges,
+    )
+
+
+@app.get("/api/memory/search")
+async def search_memory(q: str, profiles: str = "all", limit: int = 50):
+    from hermes_cli.memory_workbench import MemoryWorkbench
+
+    safe_limit = max(1, min(int(limit), 200))
+    return {"results": MemoryWorkbench().search(q, profiles=profiles, limit=safe_limit)}
+
+
 @app.get("/api/reports")
 async def get_reports():
     reports: List[Dict[str, Any]] = []

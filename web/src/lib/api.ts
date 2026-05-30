@@ -247,6 +247,23 @@ export const api = {
     return fetchJSON<LogsResponse>(`/api/logs?${qs.toString()}`);
   },
   getReports: () => fetchJSON<ReportsResponse>("/api/reports"),
+  getMemoryProfiles: () => fetchJSON<MemoryProfilesResponse>("/api/memory/profiles"),
+  getMemoryOverview: () => fetchJSON<MemoryOverviewResponse>("/api/memory/overview"),
+  getMemoryGraph: (params: { profiles?: string; includeMessages?: boolean; includeRawSources?: boolean; includeDerivedEdges?: boolean } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.profiles) qs.set("profiles", params.profiles);
+    if (params.includeMessages !== undefined) qs.set("includeMessages", String(params.includeMessages));
+    if (params.includeRawSources !== undefined) qs.set("includeRawSources", String(params.includeRawSources));
+    if (params.includeDerivedEdges !== undefined) qs.set("includeDerivedEdges", String(params.includeDerivedEdges));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return fetchJSON<MemoryGraphResponse>(`/api/memory/graph${suffix}`);
+  },
+  searchMemory: (q: string, params: { profiles?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams({ q });
+    if (params.profiles) qs.set("profiles", params.profiles);
+    if (params.limit) qs.set("limit", String(params.limit));
+    return fetchJSON<MemorySearchResponse>(`/api/memory/search?${qs.toString()}`);
+  },
   getReportDownloadUrl: (path: string) => {
     const qs = new URLSearchParams({ path });
     const token = window.__HERMES_SESSION_TOKEN__;
@@ -895,6 +912,75 @@ export interface ModelAssignmentResponse {
   model?: string;
   tasks?: string[];
   reset?: boolean;
+}
+
+// ── Memory Workbench types ──────────────────────────────────────────────
+
+export interface MemoryProfileInfo {
+  name: string;
+  path: string;
+  is_default: boolean;
+  wiki_path?: string | null;
+  has_honcho: boolean;
+}
+
+export interface MemoryNode {
+  id: string;
+  source: "hermes" | "honcho" | "wiki" | "derived";
+  kind: string;
+  label: string;
+  summary?: string;
+  editable: boolean;
+  metadata: Record<string, unknown>;
+}
+
+export interface MemoryEdge {
+  id: string;
+  source: "hermes" | "honcho" | "wiki" | "derived";
+  from: string;
+  to: string;
+  kind: string;
+}
+
+export interface MemoryGraphSummary {
+  profiles: number;
+  nodes: number;
+  edges: number;
+  hermes_entries: number;
+  wiki_pages: number;
+  honcho_nodes: number;
+}
+
+export interface MemoryGraphResponse {
+  nodes: MemoryNode[];
+  edges: MemoryEdge[];
+  summary: MemoryGraphSummary;
+  warnings: string[];
+}
+
+export interface MemoryProfilesResponse {
+  profiles: MemoryProfileInfo[];
+}
+
+export interface MemoryOverviewResponse {
+  profiles: MemoryProfileInfo[];
+  summary: MemoryGraphSummary;
+  warnings: string[];
+}
+
+export interface MemorySearchResult {
+  id: string;
+  source: MemoryNode["source"];
+  profile?: string | null;
+  kind: string;
+  title: string;
+  snippet: string;
+  editable: boolean;
+  score?: number;
+}
+
+export interface MemorySearchResponse {
+  results: MemorySearchResult[];
 }
 
 // ── OAuth provider types ────────────────────────────────────────────────
