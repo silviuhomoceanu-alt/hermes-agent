@@ -2696,6 +2696,19 @@ class MemoryCurationRequest(BaseModel):
     confirm: bool = False
 
 
+class HonchoMessageDeleteRequest(BaseModel):
+    messageIds: List[int]
+    reason: str = ""
+    confirm: bool = False
+    createBackup: bool = True
+
+
+class HonchoQueueDeleteRequest(BaseModel):
+    reason: str = ""
+    confirm: bool = False
+    createBackup: bool = True
+
+
 @app.get("/api/memory/profiles")
 async def get_memory_profiles():
     from hermes_cli.memory_workbench import MemoryWorkbench
@@ -2735,6 +2748,109 @@ async def search_memory(q: str, profiles: str = "all", limit: int = 50):
 
     safe_limit = max(1, min(int(limit), 200))
     return {"results": MemoryWorkbench().search(q, profiles=profiles, limit=safe_limit)}
+
+
+@app.get("/api/memory/honcho/admin/messages")
+async def get_memory_honcho_messages(
+    search: str = "",
+    session: str = "",
+    peer: str = "",
+    limit: int = 50,
+    offset: int = 0,
+):
+    from hermes_cli.honcho_admin import HonchoAdmin
+
+    try:
+        return HonchoAdmin().list_messages(search=search, session=session, peer=peer, limit=limit, offset=offset)
+    except ValueError as exc:
+        raise _memory_error(exc)
+    except Exception as exc:  # noqa: BLE001 - dashboard endpoint should return a controlled error
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/memory/honcho/admin/queue")
+async def get_memory_honcho_queue(
+    processed: str = "",
+    taskType: str = "",
+    limit: int = 100,
+    offset: int = 0,
+):
+    from hermes_cli.honcho_admin import HonchoAdmin
+
+    try:
+        return HonchoAdmin().list_queue(processed=processed, task_type=taskType, limit=limit, offset=offset)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/memory/honcho/admin/sessions")
+async def get_memory_honcho_admin_sessions():
+    from hermes_cli.honcho_admin import HonchoAdmin
+
+    try:
+        return HonchoAdmin().list_sessions()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/memory/honcho/admin/messages/preview-delete")
+async def post_memory_honcho_messages_preview_delete(request: HonchoMessageDeleteRequest):
+    from hermes_cli.honcho_admin import HonchoAdmin
+
+    try:
+        return HonchoAdmin().preview_delete_messages(request.messageIds)
+    except ValueError as exc:
+        raise _memory_error(exc)
+
+
+@app.post("/api/memory/honcho/admin/messages/delete")
+async def post_memory_honcho_messages_delete(request: HonchoMessageDeleteRequest):
+    from hermes_cli.honcho_admin import HonchoAdmin
+
+    try:
+        result = HonchoAdmin().delete_messages(
+            request.messageIds,
+            confirm=request.confirm,
+            reason=request.reason,
+            create_backup=request.createBackup,
+        )
+        _audit_memory_workbench(
+            "default",
+            "honcho",
+            "delete_messages",
+            success=bool(result.get("applied")),
+            details={"message_ids": request.messageIds, "deleted": result.get("deleted"), "audit_path": result.get("audit_path")},
+        )
+        return result
+    except ValueError as exc:
+        _audit_memory_workbench("default", "honcho", "delete_messages", success=False, details={"message_ids": request.messageIds}, error=str(exc))
+        raise _memory_error(exc)
+    except Exception as exc:  # noqa: BLE001
+        _audit_memory_workbench("default", "honcho", "delete_messages", success=False, details={"message_ids": request.messageIds}, error=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/memory/honcho/admin/queue/delete-processed")
+async def post_memory_honcho_queue_delete_processed(request: HonchoQueueDeleteRequest):
+    from hermes_cli.honcho_admin import HonchoAdmin
+
+    try:
+        result = HonchoAdmin().delete_processed_queue(
+            confirm=request.confirm,
+            reason=request.reason,
+            create_backup=request.createBackup,
+        )
+        _audit_memory_workbench(
+            "default",
+            "honcho",
+            "delete_processed_queue",
+            success=bool(result.get("applied")),
+            details={"deleted": result.get("deleted"), "audit_path": result.get("audit_path")},
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001
+        _audit_memory_workbench("default", "honcho", "delete_processed_queue", success=False, details={}, error=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/api/memory/link")

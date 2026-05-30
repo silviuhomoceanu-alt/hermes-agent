@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { BrainCircuit, RefreshCw } from "lucide-react";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { usePageHeader } from "@/contexts/usePageHeader";
@@ -8,6 +8,7 @@ import { MemoryGraph } from "@/components/memory/MemoryGraph";
 import { MemoryInspector } from "@/components/memory/MemoryInspector";
 import { MemorySearch } from "@/components/memory/MemorySearch";
 import { MemorySourceSidebar } from "@/components/memory/MemorySourceSidebar";
+import { HonchoAdminTable } from "@/components/memory/HonchoAdminTable";
 import { nodeSize, SOURCE_COLORS } from "@/components/memory/constants";
 import type { GraphDensitySettings, GraphLink, GraphMode, GraphNode, SourceFilter } from "@/components/memory/types";
 
@@ -34,6 +35,7 @@ export default function MemoryPage() {
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MemorySearchResult[]>([]);
+  const [activeSurface, setActiveSurface] = useState<"graph" | "records">("graph");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { setEnd } = usePageHeader();
@@ -182,7 +184,15 @@ export default function MemoryPage() {
         </div>
       ) : null}
 
-      <div className="grid min-h-[680px] gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
+      <div className="flex flex-wrap gap-2">
+        <SurfaceButton active={activeSurface === "graph"} onClick={() => setActiveSurface("graph")}>Graph</SurfaceButton>
+        <SurfaceButton active={activeSurface === "records"} onClick={() => setActiveSurface("records")}>Honcho records</SurfaceButton>
+      </div>
+
+      {activeSurface === "records" ? (
+        <HonchoAdminTable />
+      ) : (
+        <div className="grid min-h-[680px] gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
         <MemorySourceSidebar
           profiles={profiles}
           selectedProfile={selectedProfile}
@@ -227,7 +237,8 @@ export default function MemoryPage() {
         <div className="xl:col-start-2">
           <MemoryInspector {...inspectorProps} />
         </div>
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -273,5 +284,16 @@ function Metric({ label, value }: { label: string; value: number }) {
       <div className="text-base font-bold leading-none">{value}</div>
       <div className="mt-1 whitespace-nowrap text-[0.65rem] uppercase tracking-widest text-foreground/35">{label}</div>
     </div>
+  );
+}
+
+function SurfaceButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-md border px-3 py-1.5 text-sm transition ${active ? "border-midground bg-midground text-background" : "border-border/60 bg-muted/20 text-foreground/60 hover:text-foreground"}`}
+    >
+      {children}
+    </button>
   );
 }

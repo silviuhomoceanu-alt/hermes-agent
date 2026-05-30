@@ -359,6 +359,44 @@ export const api = {
     const qs = new URLSearchParams({ profile, q, limit: String(limit) });
     return fetchJSON<HonchoSearchResponse>(`/api/memory/honcho/search?${qs.toString()}`);
   },
+  getHonchoAdminMessages: (params: { search?: string; session?: string; peer?: string; limit?: number; offset?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.search) qs.set("search", params.search);
+    if (params.session) qs.set("session", params.session);
+    if (params.peer) qs.set("peer", params.peer);
+    if (params.limit) qs.set("limit", String(params.limit));
+    if (params.offset) qs.set("offset", String(params.offset));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return fetchJSON<HonchoAdminMessagesResponse>(`/api/memory/honcho/admin/messages${suffix}`);
+  },
+  getHonchoAdminQueue: (params: { processed?: string; taskType?: string; limit?: number; offset?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.processed) qs.set("processed", params.processed);
+    if (params.taskType) qs.set("taskType", params.taskType);
+    if (params.limit) qs.set("limit", String(params.limit));
+    if (params.offset) qs.set("offset", String(params.offset));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return fetchJSON<HonchoAdminQueueResponse>(`/api/memory/honcho/admin/queue${suffix}`);
+  },
+  getHonchoAdminSessions: () => fetchJSON<HonchoAdminSessionsResponse>("/api/memory/honcho/admin/sessions"),
+  previewDeleteHonchoMessages: (messageIds: number[]) =>
+    fetchJSON<HonchoAdminDeleteResponse>("/api/memory/honcho/admin/messages/preview-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messageIds, confirm: false }),
+    }),
+  deleteHonchoMessages: (body: HonchoAdminDeleteRequest) =>
+    fetchJSON<HonchoAdminDeleteResponse>("/api/memory/honcho/admin/messages/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deleteHonchoProcessedQueue: (body: HonchoAdminQueueDeleteRequest) =>
+    fetchJSON<HonchoAdminDeleteResponse>("/api/memory/honcho/admin/queue/delete-processed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   updateHonchoPeerCard: (body: HonchoPeerCardRequest) =>
     fetchJSON<HonchoWriteResponse>("/api/memory/honcho/peer-card", {
       method: "PUT",
@@ -1342,6 +1380,87 @@ export interface HonchoSearchResponse {
   profile: string;
   results: Record<string, unknown>[];
   warnings: string[];
+}
+
+export interface HonchoAdminMessage {
+  id: number;
+  public_id?: string | null;
+  created_at?: string | null;
+  peer_name?: string | null;
+  workspace_name?: string | null;
+  session_name?: string | null;
+  token_count?: number | null;
+  content_preview?: string | null;
+  content?: string | null;
+  metadata?: Record<string, unknown> | null;
+  internal_metadata?: Record<string, unknown> | null;
+}
+
+export interface HonchoAdminQueueItem {
+  id: number;
+  created_at?: string | null;
+  processed?: boolean | null;
+  task_type?: string | null;
+  work_unit_key?: string | null;
+  session_id?: number | string | null;
+  workspace_name?: string | null;
+  message_id?: number | null;
+  error?: string | null;
+  payload_preview?: string | null;
+}
+
+export interface HonchoAdminSessionItem {
+  id: number;
+  name: string;
+  workspace_name?: string | null;
+  is_active?: boolean | null;
+  created_at?: string | null;
+  message_count?: number | null;
+  queue_count?: number | null;
+  document_count?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface HonchoAdminMessagesResponse {
+  items: HonchoAdminMessage[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface HonchoAdminQueueResponse {
+  items: HonchoAdminQueueItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface HonchoAdminSessionsResponse {
+  items: HonchoAdminSessionItem[];
+  total: number;
+}
+
+export interface HonchoAdminDeleteRequest {
+  messageIds: number[];
+  reason?: string;
+  confirm?: boolean;
+  createBackup?: boolean;
+}
+
+export interface HonchoAdminQueueDeleteRequest {
+  reason?: string;
+  confirm?: boolean;
+  createBackup?: boolean;
+}
+
+export interface HonchoAdminDeleteResponse {
+  applied?: boolean;
+  requiresConfirmation?: boolean;
+  message_ids?: number[];
+  counts?: Record<string, number>;
+  deleted?: Record<string, number>;
+  backup_path?: string | null;
+  audit_path?: string | null;
 }
 
 export interface HonchoPeerCardRequest {
