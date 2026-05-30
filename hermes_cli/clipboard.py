@@ -15,9 +15,12 @@ Platform support:
 import base64
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
+from urllib.parse import unquote, urlparse
 
 from hermes_constants import is_wsl as _is_wsl
 
@@ -57,21 +60,26 @@ def has_clipboard_image() -> bool:
 
 # ── macOS ────────────────────────────────────────────────────────────────
 
+_MACOS_IMAGE_FILE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
+
+
 def _macos_save(dest: Path) -> bool:
-    """Try pngpaste first (fast, handles more formats), fall back to osascript."""
-    return _macos_pngpaste(dest) or _macos_osascript(dest)
+    """Try raw image extraction first, then Finder/file-url clipboard fallback."""
+    return _macos_pngpaste(dest) or _macos_osascript(dest) or _macos_file_url_save(dest)
 
 
 def _macos_has_image() -> bool:
-    """Check if macOS clipboard contains image data."""
+    """Check if macOS clipboard contains image data or an image file reference."""
     try:
         info = subprocess.run(
             ["osascript", "-e", "clipboard info"],
             capture_output=True, text=True, timeout=3,
         )
-        return "«class PNGf»" in info.stdout or "«class TIFF»" in info.stdout
+        if "«class PNGf»" in info.stdout or "«class TIFF»" in info.stdout:
+            return True
     except Exception:
-        return False
+        pass
+    return _macos_clipboard_image_file() is not None
 
 
 def _macos_pngpaste(dest: Path) -> bool:
@@ -88,6 +96,71 @@ def _macos_pngpaste(dest: Path) -> bool:
     except Exception as e:
         logger.debug("pngpaste failed: %s", e)
     return False
+
+
+def _macos_clipboard_image_file() -> Optional[Path]:
+    """Return an image file path from the macOS clipboard, if Finder put one there."""
+    script = (
+        'try\n'
+        '  set theFile to the clipboard as «class furl»\n'
+        '  return POSIX path of theFile\n'
+        'on error\n'
+        '  try\n'
+        '    set clipText to the clipboard as text\n'
+        '    return clipText\n'
+        '  on error\n'
+        '    return ""\n'
+        '  end try\n'
+        'end try\n'
+    )
+    try:
+        r = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=3,
+        )
+    except Exception as e:
+        logger.debug("macOS clipboard file lookup failed: %s", e)
+        return None
+
+    if r.returncode != 0:
+        return None
+
+    for raw in r.stdout.splitlines():
+        value = raw.strip()
+        if not value:
+            continue
+        parsed = urlparse(value)
+        if parsed.scheme == "file":
+            value = unquote(parsed.path)
+        path = Path(value).expanduser()
+        if path.is_file() and path.suffix.lower() in _MACOS_IMAGE_FILE_EXTS:
+            return path
+    return None
+
+
+def _macos_file_url_save(dest: Path) -> bool:
+    """Save an image file referenced by the macOS clipboard to *dest* as PNG."""
+    src = _macos_clipboard_image_file()
+    if src is None:
+        return False
+
+    try:
+        shutil.copyfile(src, dest)
+    except Exception as e:
+        logger.debug("macOS clipboard image file copy failed: %s", e)
+        return False
+
+    if not dest.exists() or dest.stat().st_size == 0:
+        dest.unlink(missing_ok=True)
+        return False
+
+    if dest.suffix.lower() == ".png" and _is_png_file(dest):
+        return True
+
+    if not _convert_to_png(dest) or not _is_png_file(dest):
+        dest.unlink(missing_ok=True)
+        return False
+    return True
 
 
 def _macos_osascript(dest: Path) -> bool:

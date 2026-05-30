@@ -25,6 +25,8 @@ from hermes_cli.clipboard import (
     _macos_pngpaste,
     _macos_osascript,
     _macos_has_image,
+    _macos_clipboard_image_file,
+    _macos_file_url_save,
     _xclip_save,
     _xclip_has_image,
     _wsl_save,
@@ -139,6 +141,45 @@ class TestMacosHasImage:
                 stdout="«class ut16», «class utf8»", returncode=0
             )
             assert _macos_has_image() is False
+
+    def test_finder_image_file_detected(self, tmp_path):
+        image = tmp_path / "copied.png"
+        image.write_bytes(FAKE_PNG)
+
+        def fake_run(cmd, **kw):
+            if cmd[-1] == "clipboard info":
+                return MagicMock(stdout="«class furl»", returncode=0)
+            return MagicMock(stdout=str(image) + "\n", returncode=0)
+
+        with patch("hermes_cli.clipboard.subprocess.run", side_effect=fake_run):
+            assert _macos_has_image() is True
+
+
+class TestMacosFileUrlFallback:
+    def test_clipboard_file_url_path_detected(self, tmp_path):
+        image = tmp_path / "copied image.png"
+        image.write_bytes(FAKE_PNG)
+        with patch("hermes_cli.clipboard.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="file://" + str(image).replace(" ", "%20") + "\n",
+                returncode=0,
+            )
+            assert _macos_clipboard_image_file() == image
+
+    def test_clipboard_non_image_file_rejected(self, tmp_path):
+        text_file = tmp_path / "note.txt"
+        text_file.write_text("not an image")
+        with patch("hermes_cli.clipboard.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=str(text_file) + "\n", returncode=0)
+            assert _macos_clipboard_image_file() is None
+
+    def test_file_url_save_copies_png(self, tmp_path):
+        image = tmp_path / "copied.png"
+        image.write_bytes(FAKE_PNG)
+        dest = tmp_path / "out.png"
+        with patch("hermes_cli.clipboard._macos_clipboard_image_file", return_value=image):
+            assert _macos_file_url_save(dest) is True
+        assert dest.read_bytes() == FAKE_PNG
 
 
 class TestMacosOsascript:

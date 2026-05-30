@@ -535,11 +535,22 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       return key === "c" && (isMac ? ev.metaKey : ev.ctrlKey && ev.shiftKey);
     };
 
+    const isMacNativePasteKey = (ev: KeyboardEvent) =>
+      isMac && ev.key.toLowerCase() === "v" && ev.metaKey && !ev.ctrlKey && !ev.altKey;
+
+    const isMacTerminalPasteKey = (ev: KeyboardEvent) =>
+      isMac &&
+      ev.key.toLowerCase() === "v" &&
+      ev.ctrlKey &&
+      !ev.metaKey &&
+      !ev.shiftKey &&
+      !ev.altKey;
+
     const isPasteKey = (ev: KeyboardEvent) => {
       const key = ev.key.toLowerCase();
       if (key !== "v") return false;
       return isMac
-        ? ev.metaKey || (ev.ctrlKey && !ev.shiftKey && !ev.altKey)
+        ? isMacNativePasteKey(ev) || isMacTerminalPasteKey(ev)
         : ev.ctrlKey && ev.shiftKey;
     };
 
@@ -586,6 +597,14 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
 
       if (isPasteKey(ev)) {
         if (!canReadClipboardItems()) {
+          // Cmd+V must fall through so the browser fires a native `paste`
+          // event with event.clipboardData.items. Ctrl+V is not a native
+          // macOS paste shortcut; letting it through sends ^V to the TUI and
+          // triggers the server-side "No image found in clipboard" path.
+          if (isMacTerminalPasteKey(ev)) {
+            ev.preventDefault();
+            return false;
+          }
           return true;
         }
         void pasteFromBrowserClipboard();
@@ -663,14 +682,22 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         return;
       }
 
-      if (isPasteKey(ev) && canReadClipboardItems()) {
-        ev.preventDefault();
-        ev.stopPropagation();
-        void pasteFromBrowserClipboard();
+      if (isPasteKey(ev)) {
+        if (canReadClipboardItems()) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          void pasteFromBrowserClipboard();
+          return;
+        }
+        if (isMacTerminalPasteKey(ev)) {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
       }
     };
 
-    host.addEventListener("paste", handleHostPaste);
+    host.addEventListener("paste", handleHostPaste, { capture: true });
+    document.addEventListener("paste", handleHostPaste, { capture: true });
     host.addEventListener("keydown", handleHostKeyDown, { capture: true });
 
     // WebGL draws from a texture atlas sized with device pixels. On phones and
@@ -890,7 +917,8 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         "resize",
         scheduleSyncTerminalMetrics,
       );
-      host.removeEventListener("paste", handleHostPaste);
+      host.removeEventListener("paste", handleHostPaste, { capture: true });
+      document.removeEventListener("paste", handleHostPaste, { capture: true });
       host.removeEventListener("keydown", handleHostKeyDown, { capture: true });
       ro.disconnect();
       if (hostSyncRaf) cancelAnimationFrame(hostSyncRaf);
