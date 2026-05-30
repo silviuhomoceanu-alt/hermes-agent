@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from hermes_cli.honcho_memory_api import HonchoMemoryAPI
 from hermes_cli.memory_sources import MemorySourceRegistry
 from hermes_cli.memory_workbench import MemoryWorkbench
 
@@ -53,15 +54,15 @@ def test_memory_workbench_accepts_current_honcho_camelcase_config(tmp_path, monk
     root = tmp_path / ".hermes"
     _write(root / "honcho.json", '{"baseUrl":"http://honcho.local","workspace":"hermes","peerName":"agent007","aiPeer":"hermes"}')
 
-    def fake_honcho_post(_self, base_url, path, payload):
-        assert base_url == "http://honcho.local"
+    def fake_post_json(_self, path, payload):
+        assert _self.safe_base_url == "http://honcho.local"
         if path.endswith("/peers/list"):
             return {"items": [{"id": "agent007"}, {"id": "hermes"}]}
         if path.endswith("/conclusions/list"):
             return {"items": []}
         return {"items": []}
 
-    monkeypatch.setattr(MemoryWorkbench, "_honcho_post", fake_honcho_post)
+    monkeypatch.setattr(HonchoMemoryAPI, "_post_json", fake_post_json)
 
     graph = MemoryWorkbench(root=root).build_graph(include_messages=False, include_raw_sources=True)
     honcho_nodes = {node["id"]: node for node in graph["nodes"] if node["source"] == "honcho"}

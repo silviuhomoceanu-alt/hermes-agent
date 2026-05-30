@@ -7,12 +7,11 @@ single graph shape suitable for an Obsidian-style dashboard page.
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.request
 from pathlib import Path
 from typing import Any, Iterable
 
+from hermes_cli.honcho_memory_api import HonchoMemoryAPI, sanitize_metadata
 from hermes_cli.memory_sources import MemorySourceRegistry, ProfileRecord
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
@@ -53,7 +52,15 @@ class MemoryWorkbench:
         warnings: list[str] = []
 
         def add_node(node: dict[str, Any]) -> None:
-            nodes.setdefault(node["id"], node)
+            existing = nodes.get(node["id"])
+            if existing is None:
+                nodes[node["id"]] = node
+                return
+            if isinstance(existing.get("metadata"), dict) and isinstance(node.get("metadata"), dict):
+                existing["metadata"] = {**existing["metadata"], **node["metadata"]}
+            if node.get("summary"):
+                existing["summary"] = node["summary"]
+            existing["editable"] = bool(existing.get("editable")) or bool(node.get("editable"))
 
         def add_edge(edge: dict[str, Any]) -> None:
             edges.setdefault(edge["id"], edge)
@@ -246,15 +253,8 @@ class MemoryWorkbench:
         cfg = profile.honcho_config or {}
         if not cfg:
             return
-        workspace = str(cfg.get("workspace") or "hermes")
-        # Honcho config has evolved across plugin versions.  Current Hermes writes
-        # camelCase keys (baseUrl, peerName, aiPeer), while older dashboard code
-        # looked only for snake_case/base ``url``.  Accept both so the graph can
-        # actually reach the configured Honcho server instead of rendering only
-        # the synthetic workspace node.
-        base_url = str(cfg.get("baseUrl") or cfg.get("base_url") or cfg.get("url") or "").rstrip("/")
-        peer_id = str(cfg.get("peerName") or cfg.get("peer_id") or cfg.get("peer") or "")
-        ai_peer_id = str(cfg.get("aiPeer") or cfg.get("ai_peer") or "")
+        honcho = HonchoMemoryAPI.from_config(profile.name, cfg)
+        workspace = honcho.workspace
         workspace_id = f"honcho:{profile.name}:workspace:{workspace}"
         add_node({
             "id": workspace_id,
@@ -262,48 +262,36 @@ class MemoryWorkbench:
             "kind": "honcho_workspace",
             "label": workspace,
             "editable": False,
-            "metadata": {"profile": profile.name, "base_url": base_url, "workspace": workspace},
+            "metadata": {"profile": profile.name, "base_url": honcho.safe_base_url, "workspace": workspace},
         })
         add_edge(self._edge(profile_id, workspace_id, "contains", "honcho"))
-        for configured_peer_id in {peer_id, ai_peer_id}:
-            if configured_peer_id:
-                peer_node_id = f"honcho:{profile.name}:peer:{configured_peer_id}"
-                add_node({"id": peer_node_id, "source": "honcho", "kind": "honcho_peer", "label": configured_peer_id, "editable": True, "metadata": {"profile": profile.name, "peer_id": configured_peer_id}})
-                add_edge(self._edge(workspace_id, peer_node_id, "contains", "honcho"))
-        if not base_url:
+        for configured_peer_id in honcho.configured_peer_ids:
+            peer_node_id = f"honcho:{profile.name}:peer:{configured_peer_id}"
+            add_node({"id": peer_node_id, "source": "honcho", "kind": "honcho_peer", "label": configured_peer_id, "editable": True, "metadata": {"profile": profile.name, "peer_id": configured_peer_id}})
+            add_edge(self._edge(workspace_id, peer_node_id, "contains", "honcho"))
+        if not honcho.has_base_url:
             return
-        # Best-effort live probe. Fail soft; dashboard must load if Honcho is offline.
-        try:
-            peers = self._honcho_post(base_url, f"/v3/workspaces/{workspace}/peers/list", {})
-            for peer in self.sources.extract_items(peers):
-                pid = str(peer.get("id") or peer.get("peer_id") or peer.get("name") or "").strip()
-                if not pid:
-                    continue
-                node_id = f"honcho:{profile.name}:peer:{pid}"
-                add_node({"id": node_id, "source": "honcho", "kind": "honcho_peer", "label": pid, "editable": True, "metadata": {"profile": profile.name, "peer": peer}})
-                add_edge(self._edge(workspace_id, node_id, "contains", "honcho"))
-        except Exception as exc:  # noqa: BLE001 - warning only
-            warnings.append(f"Honcho unavailable for profile {profile.name}: {exc}")
-        try:
-            conclusions = self._honcho_post(base_url, f"/v3/workspaces/{workspace}/conclusions/list", {})
-            for item in self.sources.extract_items(conclusions):
-                cid = str(item.get("id") or item.get("uuid") or len(str(item)))
-                text = str(item.get("content") or item.get("conclusion") or item.get("text") or item)
-                node_id = f"honcho:{profile.name}:conclusion:{cid}"
-                add_node({"id": node_id, "source": "honcho", "kind": "honcho_conclusion", "label": self._short_label(text), "summary": text, "editable": True, "metadata": {"profile": profile.name, "content": text, "raw": item}})
-                add_edge(self._edge(workspace_id, node_id, "contains", "honcho"))
-        except Exception:
-            pass
+        peers = honcho.list_peers()
+        warnings.extend(peers.warnings)
+        for peer in peers.items:
+            pid = str(peer.get("id") or peer.get("peer_id") or peer.get("name") or "").strip()
+            if not pid:
+                continue
+            node_id = f"honcho:{profile.name}:peer:{pid}"
+            add_node({"id": node_id, "source": "honcho", "kind": "honcho_peer", "label": pid, "editable": True, "metadata": {"profile": profile.name, "peer": sanitize_metadata(peer)}})
+            add_edge(self._edge(workspace_id, node_id, "contains", "honcho"))
+        conclusions = honcho.list_conclusions()
+        warnings.extend(conclusions.warnings)
+        for item in conclusions.items:
+            cid = str(item.get("id") or item.get("uuid") or len(str(item)))
+            text = str(item.get("content") or item.get("conclusion") or item.get("text") or item)
+            node_id = f"honcho:{profile.name}:conclusion:{cid}"
+            add_node({"id": node_id, "source": "honcho", "kind": "honcho_conclusion", "label": self._short_label(text), "summary": text, "editable": True, "metadata": {"profile": profile.name, "content": text, "raw": sanitize_metadata(item)}})
+            add_edge(self._edge(workspace_id, node_id, "contains", "honcho"))
         if include_messages:
             # Message pagination varies across Honcho releases; keep the type in the schema but
             # do not risk expensive crawling until the user toggles it in a later editing phase.
             pass
-
-    def _honcho_post(self, base_url: str, path: str, payload: dict[str, Any]) -> Any:
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(f"{base_url}{path}", data=data, headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=0.7) as resp:
-            return json.loads(resp.read().decode("utf-8"))
 
     # ------------------------------------------------------------------
     # Derived edges/search helpers
