@@ -92,6 +92,27 @@ class HonchoMemoryAPI:
     def list_conclusions(self) -> HonchoAPIResult:
         return self._list_endpoint("conclusions", f"/v3/workspaces/{self.workspace}/conclusions/list", {})
 
+    def list_sessions(self) -> HonchoAPIResult:
+        return self._list_endpoint("sessions", f"/v3/workspaces/{self.workspace}/sessions/list", {})
+
+    def search(self, query: str, limit: int = 20) -> HonchoAPIResult:
+        return self._list_endpoint("search", f"/v3/workspaces/{self.workspace}/search", {"query": query, "limit": limit})
+
+    def update_peer_card(self, peer_id: str, card: list[str]) -> dict[str, Any]:
+        if not self.base_url:
+            raise RuntimeError("Honcho base URL is not configured")
+        return self._post_json(f"/v3/workspaces/{self.workspace}/peers/{urllib.parse.quote(peer_id, safe='')}/card", {"card": card})
+
+    def create_conclusion(self, peer_id: str, conclusion: str) -> dict[str, Any]:
+        if not self.base_url:
+            raise RuntimeError("Honcho base URL is not configured")
+        return self._post_json(f"/v3/workspaces/{self.workspace}/peers/{urllib.parse.quote(peer_id, safe='')}/conclusions", {"conclusion": conclusion})
+
+    def delete_conclusion(self, conclusion_id: str) -> dict[str, Any]:
+        if not self.base_url:
+            raise RuntimeError("Honcho base URL is not configured")
+        return self._delete_json(f"/v3/workspaces/{self.workspace}/conclusions/{urllib.parse.quote(conclusion_id, safe='')}")
+
     def _list_endpoint(self, label: str, path: str, payload: dict[str, Any]) -> HonchoAPIResult:
         if not self.base_url:
             return HonchoAPIResult()
@@ -101,13 +122,14 @@ class HonchoMemoryAPI:
         except Exception as exc:  # noqa: BLE001 - dashboard should fail soft
             return HonchoAPIResult(warnings=[f"Honcho {label} unavailable for profile {self.profile}: {exc}"])
 
-    def _post_json(self, path: str, payload: dict[str, Any]) -> Any:
-        data = json.dumps(payload).encode("utf-8")
+    def _request_json(self, path: str, *, method: str = "GET", payload: dict[str, Any] | None = None) -> Any:
+        data = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
+        headers = {"Content-Type": "application/json"} if payload is not None else {}
         req = urllib.request.Request(
             f"{self.base_url}{path}",
             data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+            headers=headers,
+            method=method,
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -116,6 +138,13 @@ class HonchoMemoryAPI:
             reason = getattr(exc, "reason", exc)
             raise RuntimeError(reason) from exc
         return json.loads(raw) if raw else {}
+
+    def _post_json(self, path: str, payload: dict[str, Any]) -> Any:
+        return self._request_json(path, method="POST", payload=payload)
+
+    def _delete_json(self, path: str) -> Any:
+        return self._request_json(path, method="DELETE")
+
 
 
 def extract_items(data: Any) -> list[dict[str, Any]]:

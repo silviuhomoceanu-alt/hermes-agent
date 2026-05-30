@@ -8,6 +8,9 @@ frontmatter parsing, wikilink resolution, and linting out of ``web_server.py``.
 from __future__ import annotations
 
 import re
+import shutil
+import tempfile
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -152,6 +155,67 @@ class WikiMemory:
             },
         }
 
+
+    def save_page(self, profile: str = "default", path: str = "index.md", *, frontmatter: dict[str, Any] | None = None, body: str | None = None, raw: str | None = None) -> dict[str, Any]:
+        """Create or update an existing curated wiki page with backup/log/index discipline."""
+        profile_record, wiki_root = self._profile_and_root(profile)
+        target = self._resolve_writable_page_path(wiki_root, path)
+        existed = target.exists()
+        if target.exists() and not target.is_file():
+            raise ValueError(f"Wiki path is not a file: {path}")
+        content = self._compose_page_content(frontmatter=frontmatter, body=body, raw=raw)
+        parsed_frontmatter, _parsed_body = self._strict_split_frontmatter(content)
+        self._validate_frontmatter(parsed_frontmatter, required_title=not existed)
+        if existed:
+            self._backup_page(wiki_root, target)
+        self._atomic_write(target, content)
+        rel = target.relative_to(wiki_root).as_posix()
+        self._update_index(wiki_root, rel, remove=None)
+        self._append_log(wiki_root, "update" if existed else "create", rel)
+        pages = self._pages(wiki_root)
+        record = self._read_page(target, wiki_root)
+        payload = self._page_payload(profile_record.name, wiki_root, record, pages)
+        payload["created"] = not existed
+        return payload
+
+    def create_page(self, profile: str = "default", path: str = "", *, frontmatter: dict[str, Any] | None = None, body: str | None = None, raw: str | None = None) -> dict[str, Any]:
+        profile_record, wiki_root = self._profile_and_root(profile)
+        target = self._resolve_writable_page_path(wiki_root, path)
+        if target.exists():
+            raise ValueError(f"Wiki page already exists: {path}")
+        content = self._compose_page_content(frontmatter=frontmatter, body=body, raw=raw)
+        parsed_frontmatter, _parsed_body = self._strict_split_frontmatter(content)
+        self._validate_frontmatter(parsed_frontmatter, required_title=True)
+        self._atomic_write(target, content)
+        rel = target.relative_to(wiki_root).as_posix()
+        self._update_index(wiki_root, rel, remove=None)
+        self._append_log(wiki_root, "create", rel)
+        pages = self._pages(wiki_root)
+        record = self._read_page(target, wiki_root)
+        payload = self._page_payload(profile_record.name, wiki_root, record, pages)
+        payload["created"] = True
+        return payload
+
+    def rename_page(self, profile: str = "default", old_path: str = "", new_path: str = "") -> dict[str, Any]:
+        profile_record, wiki_root = self._profile_and_root(profile)
+        source = self._resolve_writable_page_path(wiki_root, old_path)
+        target = self._resolve_writable_page_path(wiki_root, new_path)
+        if not source.is_file():
+            raise ValueError(f"Wiki page not found: {old_path}")
+        if target.exists():
+            raise ValueError(f"Destination wiki page already exists: {new_path}")
+        old_rel = source.relative_to(wiki_root).as_posix()
+        new_rel = target.relative_to(wiki_root).as_posix()
+        self._backup_page(wiki_root, source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.replace(target)
+        self._rewrite_wikilinks(wiki_root, old_rel, new_rel)
+        self._update_index(wiki_root, new_rel, remove=old_rel)
+        self._append_log(wiki_root, "rename", f"{old_rel} -> {new_rel}")
+        pages = self._pages(wiki_root)
+        record = self._read_page(target, wiki_root)
+        return self._page_payload(profile_record.name, wiki_root, record, pages)
+
     # ------------------------------------------------------------------
     # Profile/root and path safety
     # ------------------------------------------------------------------
@@ -193,6 +257,112 @@ class WikiMemory:
             return True
         except ValueError:
             return False
+
+
+    def _resolve_writable_page_path(self, wiki_root: Path, requested: str) -> Path:
+        target = self._resolve_page_path(wiki_root, requested)
+        rel = target.relative_to(wiki_root).as_posix()
+        if rel == "raw" or rel.startswith("raw/"):
+            raise ValueError("Writes under raw/ are not allowed")
+        return target
+
+    def _compose_page_content(self, *, frontmatter: dict[str, Any] | None, body: str | None, raw: str | None) -> str:
+        if raw is not None:
+            self._strict_split_frontmatter(raw)
+            return raw if raw.endswith("\n") else raw + "\n"
+        if frontmatter is None:
+            raise ValueError("Missing wiki frontmatter")
+        try:
+            import yaml
+            fm = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).strip()
+        except Exception as exc:
+            raise ValueError(f"Invalid wiki frontmatter: {exc}") from exc
+        text = f"---\n{fm}\n---\n{body or ''}"
+        return text if text.endswith("\n") else text + "\n"
+
+    def _strict_split_frontmatter(self, text: str) -> tuple[dict[str, Any], str]:
+        if not text.startswith("---\n"):
+            raise ValueError("Wiki page must start with YAML frontmatter")
+        end = text.find("\n---", 4)
+        if end < 0:
+            raise ValueError("Broken wiki frontmatter: missing closing ---")
+        raw = text[4:end]
+        body_start = end + len("\n---")
+        if body_start < len(text) and text[body_start] == "\n":
+            body_start += 1
+        try:
+            import yaml
+            data = yaml.safe_load(raw) or {}
+        except Exception as exc:
+            raise ValueError(f"Broken wiki frontmatter: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError("Wiki frontmatter must be a mapping")
+        return data, text[body_start:]
+
+    def _validate_frontmatter(self, frontmatter: dict[str, Any], *, required_title: bool = False) -> None:
+        if required_title and not str(frontmatter.get("title") or "").strip():
+            raise ValueError("Wiki frontmatter must include title")
+        tags = frontmatter.get("tags")
+        if tags is not None:
+            tag_values = self.sources.as_list(tags)
+            bad = [str(tag) for tag in tag_values if not re.match(r"^[a-z0-9][a-z0-9_/-]{0,63}$", str(tag))]
+            if bad:
+                raise ValueError(f"Invalid wiki tag(s): {', '.join(bad)}")
+
+    def _backup_page(self, wiki_root: Path, path: Path) -> None:
+        if not path.exists():
+            return
+        rel = path.relative_to(wiki_root)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = wiki_root / ".bak" / stamp / rel
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, backup)
+
+    @staticmethod
+    def _atomic_write(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=str(path.parent), delete=False) as tmp:
+            tmp.write(content)
+            tmp_name = tmp.name
+        Path(tmp_name).replace(path)
+
+    def _append_log(self, wiki_root: Path, action: str, detail: str) -> None:
+        log = wiki_root / "log.md"
+        line = f"- {datetime.now(timezone.utc).isoformat(timespec='seconds')}: {action} {detail}\n"
+        existing = log.read_text(encoding="utf-8", errors="replace") if log.exists() else "# Log\n\n"
+        self._atomic_write(log, existing + line)
+
+    def _update_index(self, wiki_root: Path, add: str, *, remove: str | None) -> None:
+        index = wiki_root / "index.md"
+        existing = index.read_text(encoding="utf-8", errors="replace") if index.exists() else "---\ntitle: Home\n---\n# Home\n"
+        if remove:
+            existing = existing.replace(f"[[{remove.removesuffix('.md')}]]", f"[[{add.removesuffix('.md')}]]")
+            existing = existing.replace(f"[[{remove}]]", f"[[{add}]]")
+        link = f"[[{add.removesuffix('.md')}]]"
+        if add != "index.md" and link not in existing:
+            existing = existing.rstrip() + f"\n- {link}\n"
+        self._atomic_write(index, existing)
+
+    def _rewrite_wikilinks(self, wiki_root: Path, old_rel: str, new_rel: str) -> None:
+        old_no = old_rel.removesuffix(".md")
+        new_no = new_rel.removesuffix(".md")
+        old_stem = Path(old_rel).stem
+        new_stem = Path(new_rel).stem
+        replacements = {
+            f"[[{old_rel}]]": f"[[{new_rel}]]",
+            f"[[{old_no}]]": f"[[{new_no}]]",
+            f"[[{old_stem}]]": f"[[{new_stem}]]",
+        }
+        for page in self._pages(wiki_root):
+            if page.is_raw or page.rel == new_rel:
+                continue
+            text = page.raw
+            updated = text
+            for old, new in replacements.items():
+                updated = updated.replace(old, new)
+            if updated != text:
+                self._backup_page(wiki_root, page.path)
+                self._atomic_write(page.path, updated)
 
     # ------------------------------------------------------------------
     # Page indexing/parsing

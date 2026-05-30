@@ -153,9 +153,72 @@ def test_wiki_memory_dashboard_routes(monkeypatch, tmp_path):
         assert lint.status_code == 200
         assert lint.json()["summary"]["issues"] >= 1
 
+        create = client.post("/api/memory/wiki/page", json={"profile": "default", "path": "concepts/created.md", "frontmatter": {"title": "Created"}, "body": "# Created\n"}, headers=headers)
+        assert create.status_code == 200
+        assert create.json()["path"] == "concepts/created.md"
+
+        update = client.put("/api/memory/wiki/page", json={"profile": "default", "path": "concepts/created.md", "frontmatter": {"title": "Created 2"}, "body": "# Created 2\n"}, headers=headers)
+        assert update.status_code == 200
+        assert update.json()["title"] == "Created 2"
+
+        rename = client.post("/api/memory/wiki/rename", json={"profile": "default", "oldPath": "concepts/created.md", "newPath": "concepts/renamed.md"}, headers=headers)
+        assert rename.status_code == 200
+        assert rename.json()["path"] == "concepts/renamed.md"
+
         blocked = client.get("/api/memory/wiki/page", params={"profile": "default", "path": "../secret.md"}, headers=headers)
         assert blocked.status_code == 400
     finally:
         web_server.app.state.auth_required = prev_required
         web_server.app.state.bound_host = prev_host
         web_server.app.state.bound_port = prev_port
+
+
+
+def test_wiki_memory_save_create_and_rename_updates_index_log_and_backlinks(tmp_path):
+    root = tmp_path / ".hermes"
+    wiki = tmp_path / "wiki"
+    _fixture(root, wiki)
+    api = WikiMemory(root=root)
+
+    updated = api.save_page(
+        "default",
+        "concepts/foo.md",
+        frontmatter={"title": "Foo Updated", "tags": ["test"]},
+        body="# Foo Updated\n\nLinks to [[entities/hermes]].\n",
+    )
+    assert updated["title"] == "Foo Updated"
+    assert (wiki / ".bak").exists()
+    assert "update concepts/foo.md" in (wiki / "log.md").read_text(encoding="utf-8")
+
+    created = api.create_page(
+        "default",
+        "concepts/new-page.md",
+        frontmatter={"title": "New Page", "tags": ["test/new"]},
+        body="# New Page\n\nLinks to [[concepts/foo]].\n",
+    )
+    assert created["created"] is True
+    index = (wiki / "index.md").read_text(encoding="utf-8")
+    assert "[[concepts/new-page]]" in index
+    assert "create concepts/new-page.md" in (wiki / "log.md").read_text(encoding="utf-8")
+
+    renamed = api.rename_page("default", "concepts/new-page.md", "concepts/renamed-page.md")
+    assert renamed["path"] == "concepts/renamed-page.md"
+    assert not (wiki / "concepts" / "new-page.md").exists()
+    assert (wiki / "concepts" / "renamed-page.md").exists()
+    index = (wiki / "index.md").read_text(encoding="utf-8")
+    assert "[[concepts/renamed-page]]" in index
+    assert "rename concepts/new-page.md -> concepts/renamed-page.md" in (wiki / "log.md").read_text(encoding="utf-8")
+
+
+def test_wiki_memory_write_rejects_raw_traversal_and_broken_frontmatter(tmp_path):
+    root = tmp_path / ".hermes"
+    wiki = tmp_path / "wiki"
+    _fixture(root, wiki)
+    api = WikiMemory(root=root)
+
+    with pytest.raises(ValueError, match="raw/"):
+        api.save_page("default", "raw/nope.md", frontmatter={"title": "Nope"}, body="nope")
+    with pytest.raises(ValueError, match="outside the wiki root"):
+        api.create_page("default", "../nope.md", frontmatter={"title": "Nope"}, body="nope")
+    with pytest.raises(ValueError, match="Broken wiki frontmatter"):
+        api.save_page("default", "concepts/bad.md", raw="---\ntitle: [broken\n---\n# Bad\n")

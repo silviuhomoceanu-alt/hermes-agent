@@ -1,5 +1,6 @@
 import socket
 import urllib.error
+from fastapi.testclient import TestClient
 
 from hermes_cli.honcho_memory_api import HonchoMemoryAPI, extract_items, sanitize_metadata
 from hermes_cli.memory_workbench import MemoryWorkbench
@@ -127,3 +128,99 @@ def test_memory_workbench_uses_honcho_wrapper_and_never_exposes_secret_metadata(
     assert nodes["honcho:default:peer:agent007"]["metadata"]["peer"] == {"id": "agent007", "display": "Silviu"}
     assert nodes["honcho:default:conclusion:c1"]["metadata"]["raw"] == {"id": "c1", "content": "Prefers direct replies"}
     assert graph["warnings"] == []
+
+
+
+def test_honcho_dashboard_routes_read_write_and_confirmation(tmp_path, monkeypatch):
+    from hermes_cli import memory_sources, web_server
+
+    root = tmp_path / ".hermes"
+    _write(root / "honcho.json", '{"baseUrl":"http://honcho.local","workspace":"hermes","peerName":"agent007","aiPeer":"hermes"}')
+    monkeypatch.setattr(memory_sources, "get_default_hermes_root", lambda: root)
+
+    calls = []
+
+    def fake_post_json(self, path, payload):
+        calls.append(("POST", path, payload))
+        if path.endswith("/peers/list"):
+            return {"items": [{"id": "agent007"}]}
+        if path.endswith("/conclusions/list"):
+            return {"items": [{"id": "c1", "content": "Existing"}]}
+        if path.endswith("/sessions/list"):
+            return {"items": [{"id": "s1"}]}
+        if path.endswith("/search"):
+            return {"items": [{"id": "hit"}]}
+        return {"ok": True}
+
+    def fake_delete_json(self, path):
+        calls.append(("DELETE", path, None))
+        return {"deleted": True}
+
+    monkeypatch.setattr(HonchoMemoryAPI, "_post_json", fake_post_json)
+    monkeypatch.setattr(HonchoMemoryAPI, "_delete_json", fake_delete_json)
+
+    prev_required = getattr(web_server.app.state, "auth_required", None)
+    prev_host = getattr(web_server.app.state, "bound_host", None)
+    prev_port = getattr(web_server.app.state, "bound_port", None)
+    web_server.app.state.auth_required = False
+    web_server.app.state.bound_host = "127.0.0.1"
+    web_server.app.state.bound_port = 8080
+    try:
+        client = TestClient(web_server.app, base_url="http://127.0.0.1:8080")
+        headers = {web_server._SESSION_HEADER_NAME: web_server._SESSION_TOKEN}
+
+        status = client.get("/api/memory/honcho/status", params={"profile": "default"}, headers=headers)
+        assert status.status_code == 200
+        assert status.json()["peers"] == ["agent007", "hermes"]
+
+        assert client.get("/api/memory/honcho/peers", params={"profile": "default"}, headers=headers).json()["peers"] == [{"id": "agent007"}]
+        assert client.get("/api/memory/honcho/conclusions", params={"profile": "default"}, headers=headers).json()["conclusions"] == [{"id": "c1", "content": "Existing"}]
+        assert client.get("/api/memory/honcho/sessions", params={"profile": "default"}, headers=headers).json()["sessions"] == [{"id": "s1"}]
+        assert client.get("/api/memory/honcho/search", params={"profile": "default", "q": "direct"}, headers=headers).json()["results"] == [{"id": "hit"}]
+
+        peer_card = client.put("/api/memory/honcho/peer-card", json={"profile": "default", "peerId": "agent007", "card": ["Prefers direct replies"]}, headers=headers)
+        assert peer_card.status_code == 200
+        create = client.post("/api/memory/honcho/conclusions", json={"profile": "default", "peerId": "agent007", "conclusion": "Prefers direct replies"}, headers=headers)
+        assert create.status_code == 200
+        delete_unconfirmed = client.delete("/api/memory/honcho/conclusions/c1", params={"profile": "default"}, headers=headers)
+        assert delete_unconfirmed.status_code == 400
+        delete = client.delete("/api/memory/honcho/conclusions/c1", params={"profile": "default", "confirm": "true"}, headers=headers)
+        assert delete.status_code == 200
+
+        assert ("POST", "/v3/workspaces/hermes/peers/list", {}) in calls
+        assert ("POST", "/v3/workspaces/hermes/conclusions/list", {}) in calls
+        assert ("POST", "/v3/workspaces/hermes/peers/agent007/card", {"card": ["Prefers direct replies"]}) in calls
+        assert ("POST", "/v3/workspaces/hermes/peers/agent007/conclusions", {"conclusion": "Prefers direct replies"}) in calls
+        assert ("DELETE", "/v3/workspaces/hermes/conclusions/c1", None) in calls
+    finally:
+        web_server.app.state.auth_required = prev_required
+        web_server.app.state.bound_host = prev_host
+        web_server.app.state.bound_port = prev_port
+
+
+def test_honcho_dashboard_offline_status_warning(tmp_path, monkeypatch):
+    from hermes_cli import memory_sources, web_server
+
+    root = tmp_path / ".hermes"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(memory_sources, "get_default_hermes_root", lambda: root)
+
+    prev_required = getattr(web_server.app.state, "auth_required", None)
+    prev_host = getattr(web_server.app.state, "bound_host", None)
+    prev_port = getattr(web_server.app.state, "bound_port", None)
+    web_server.app.state.auth_required = False
+    web_server.app.state.bound_host = "127.0.0.1"
+    web_server.app.state.bound_port = 8080
+    try:
+        client = TestClient(web_server.app, base_url="http://127.0.0.1:8080")
+        headers = {web_server._SESSION_HEADER_NAME: web_server._SESSION_TOKEN}
+        status = client.get("/api/memory/honcho/status", params={"profile": "default"}, headers=headers)
+        assert status.status_code == 200
+        assert status.json()["configured"] is False
+        assert status.json()["warnings"]
+        raw_edit = client.put("/api/memory/honcho/messages/m1", json={"content": "nope"}, headers=headers)
+        assert raw_edit.status_code in {404, 405}
+    finally:
+        web_server.app.state.auth_required = prev_required
+        web_server.app.state.bound_host = prev_host
+        web_server.app.state.bound_port = prev_port

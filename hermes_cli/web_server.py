@@ -2753,6 +2753,166 @@ async def get_memory_wiki_lint(profile: str = "default"):
         raise _memory_error(exc)
 
 
+
+class WikiPageWriteRequest(BaseModel):
+    profile: str = "default"
+    path: str
+    frontmatter: Optional[Dict[str, Any]] = None
+    body: Optional[str] = None
+    raw: Optional[str] = None
+
+
+class WikiRenameRequest(BaseModel):
+    profile: str = "default"
+    oldPath: str
+    newPath: str
+
+
+@app.put("/api/memory/wiki/page")
+async def put_memory_wiki_page(request: WikiPageWriteRequest):
+    from hermes_cli.wiki_memory import WikiMemory
+
+    try:
+        return WikiMemory().save_page(request.profile, request.path, frontmatter=request.frontmatter, body=request.body, raw=request.raw)
+    except ValueError as exc:
+        raise _memory_error(exc)
+
+
+@app.post("/api/memory/wiki/page")
+async def post_memory_wiki_page(request: WikiPageWriteRequest):
+    from hermes_cli.wiki_memory import WikiMemory
+
+    try:
+        return WikiMemory().create_page(request.profile, request.path, frontmatter=request.frontmatter, body=request.body, raw=request.raw)
+    except ValueError as exc:
+        raise _memory_error(exc)
+
+
+@app.post("/api/memory/wiki/rename")
+async def post_memory_wiki_rename(request: WikiRenameRequest):
+    from hermes_cli.wiki_memory import WikiMemory
+
+    try:
+        return WikiMemory().rename_page(request.profile, request.oldPath, request.newPath)
+    except ValueError as exc:
+        raise _memory_error(exc)
+
+
+class HonchoPeerCardRequest(BaseModel):
+    profile: str = "default"
+    peerId: str
+    card: List[str]
+
+
+class HonchoConclusionRequest(BaseModel):
+    profile: str = "default"
+    peerId: str
+    conclusion: str
+
+
+def _honcho_api_for_profile(profile: str):
+    from hermes_cli.honcho_memory_api import HonchoMemoryAPI
+    from hermes_cli.memory_sources import MemorySourceRegistry
+
+    registry = MemorySourceRegistry()
+    selected = registry.select_profiles(profile)
+    if not selected:
+        raise ValueError(f"Unknown Hermes profile: {profile}")
+    if len(selected) != 1:
+        raise ValueError(f"Expected exactly one profile, got: {profile}")
+    record = selected[0]
+    return HonchoMemoryAPI.from_config(record.name, record.honcho_config), record
+
+
+@app.get("/api/memory/honcho/status")
+async def get_memory_honcho_status(profile: str = "default"):
+    try:
+        api, record = _honcho_api_for_profile(profile)
+    except ValueError as exc:
+        raise _memory_error(exc)
+    warnings = [] if api.has_base_url else [f"Honcho is not configured for profile {record.name}"]
+    return {
+        "profile": record.name,
+        "configured": api.has_base_url,
+        "base_url": api.safe_base_url,
+        "workspace": api.workspace,
+        "peers": api.configured_peer_ids,
+        "warnings": warnings,
+    }
+
+
+@app.get("/api/memory/honcho/peers")
+async def get_memory_honcho_peers(profile: str = "default"):
+    try:
+        api, record = _honcho_api_for_profile(profile)
+    except ValueError as exc:
+        raise _memory_error(exc)
+    result = api.list_peers()
+    return {"profile": record.name, "peers": result.items, "warnings": result.warnings}
+
+
+@app.get("/api/memory/honcho/conclusions")
+async def get_memory_honcho_conclusions(profile: str = "default"):
+    try:
+        api, record = _honcho_api_for_profile(profile)
+    except ValueError as exc:
+        raise _memory_error(exc)
+    result = api.list_conclusions()
+    return {"profile": record.name, "conclusions": result.items, "warnings": result.warnings}
+
+
+@app.get("/api/memory/honcho/sessions")
+async def get_memory_honcho_sessions(profile: str = "default"):
+    try:
+        api, record = _honcho_api_for_profile(profile)
+    except ValueError as exc:
+        raise _memory_error(exc)
+    result = api.list_sessions()
+    return {"profile": record.name, "sessions": result.items, "warnings": result.warnings}
+
+
+@app.get("/api/memory/honcho/search")
+async def get_memory_honcho_search(profile: str = "default", q: str = "", limit: int = 20):
+    try:
+        api, record = _honcho_api_for_profile(profile)
+    except ValueError as exc:
+        raise _memory_error(exc)
+    result = api.search(q, max(1, min(int(limit), 100)))
+    return {"profile": record.name, "results": result.items, "warnings": result.warnings}
+
+
+@app.put("/api/memory/honcho/peer-card")
+async def put_memory_honcho_peer_card(request: HonchoPeerCardRequest):
+    try:
+        api, record = _honcho_api_for_profile(request.profile)
+        result = api.update_peer_card(request.peerId, request.card)
+    except (ValueError, RuntimeError) as exc:
+        raise _memory_error(exc)
+    return {"profile": record.name, "result": result}
+
+
+@app.post("/api/memory/honcho/conclusions")
+async def post_memory_honcho_conclusion(request: HonchoConclusionRequest):
+    try:
+        api, record = _honcho_api_for_profile(request.profile)
+        result = api.create_conclusion(request.peerId, request.conclusion)
+    except (ValueError, RuntimeError) as exc:
+        raise _memory_error(exc)
+    return {"profile": record.name, "result": result}
+
+
+@app.delete("/api/memory/honcho/conclusions/{conclusion_id}")
+async def delete_memory_honcho_conclusion(conclusion_id: str, profile: str = "default", confirm: bool = False):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Conclusion delete requires explicit confirmation")
+    try:
+        api, record = _honcho_api_for_profile(profile)
+        result = api.delete_conclusion(conclusion_id)
+    except (ValueError, RuntimeError) as exc:
+        raise _memory_error(exc)
+    return {"profile": record.name, "result": result}
+
+
 class AddHermesMemoryRequest(BaseModel):
     profile: str = "default"
     target: str

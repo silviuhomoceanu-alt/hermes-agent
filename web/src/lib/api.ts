@@ -302,6 +302,54 @@ export const api = {
   },
   getWikiLint: (profile = "default") =>
     fetchJSON<WikiLintResponse>(`/api/memory/wiki/lint?profile=${encodeURIComponent(profile)}`),
+  saveWikiPage: (body: WikiPageWriteRequest) =>
+    fetchJSON<WikiPageResponse>("/api/memory/wiki/page", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  createWikiPage: (body: WikiPageWriteRequest) =>
+    fetchJSON<WikiPageResponse>("/api/memory/wiki/page", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  renameWikiPage: (body: WikiRenameRequest) =>
+    fetchJSON<WikiPageResponse>("/api/memory/wiki/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  getHonchoStatus: (profile = "default") =>
+    fetchJSON<HonchoStatusResponse>(`/api/memory/honcho/status?profile=${encodeURIComponent(profile)}`),
+  getHonchoPeers: (profile = "default") =>
+    fetchJSON<HonchoPeersResponse>(`/api/memory/honcho/peers?profile=${encodeURIComponent(profile)}`),
+  getHonchoConclusions: (profile = "default") =>
+    fetchJSON<HonchoConclusionsResponse>(`/api/memory/honcho/conclusions?profile=${encodeURIComponent(profile)}`),
+  getHonchoSessions: (profile = "default") =>
+    fetchJSON<HonchoSessionsResponse>(`/api/memory/honcho/sessions?profile=${encodeURIComponent(profile)}`),
+  searchHoncho: (profile: string, q: string, limit = 20) => {
+    const qs = new URLSearchParams({ profile, q, limit: String(limit) });
+    return fetchJSON<HonchoSearchResponse>(`/api/memory/honcho/search?${qs.toString()}`);
+  },
+  updateHonchoPeerCard: (body: HonchoPeerCardRequest) =>
+    fetchJSON<HonchoWriteResponse>("/api/memory/honcho/peer-card", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  createHonchoConclusion: (body: HonchoConclusionRequest) =>
+    fetchJSON<HonchoWriteResponse>("/api/memory/honcho/conclusions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deleteHonchoConclusion: (profile: string, conclusionId: string, confirm = true) => {
+    const qs = new URLSearchParams({ profile, confirm: String(confirm) });
+    return fetchJSON<HonchoWriteResponse>(`/api/memory/honcho/conclusions/${encodeURIComponent(conclusionId)}?${qs.toString()}`, {
+      method: "DELETE",
+    });
+  },
   getReportDownloadUrl: (path: string) => {
     const qs = new URLSearchParams({ path });
     const token = window.__HERMES_SESSION_TOKEN__;
@@ -1139,6 +1187,71 @@ export interface WikiLintIssue {
   severity: "error" | "warning";
   link?: string;
   source?: string;
+}
+
+
+export interface WikiPageWriteRequest {
+  profile: string;
+  path: string;
+  frontmatter?: Record<string, unknown> | null;
+  body?: string | null;
+  raw?: string | null;
+}
+
+export interface WikiRenameRequest {
+  profile: string;
+  oldPath: string;
+  newPath: string;
+}
+
+export interface HonchoStatusResponse {
+  profile: string;
+  configured: boolean;
+  base_url: string;
+  workspace: string;
+  peers: string[];
+  warnings: string[];
+}
+
+export interface HonchoPeersResponse {
+  profile: string;
+  peers: Record<string, unknown>[];
+  warnings: string[];
+}
+
+export interface HonchoConclusionsResponse {
+  profile: string;
+  conclusions: Record<string, unknown>[];
+  warnings: string[];
+}
+
+export interface HonchoSessionsResponse {
+  profile: string;
+  sessions: Record<string, unknown>[];
+  warnings: string[];
+}
+
+export interface HonchoSearchResponse {
+  profile: string;
+  results: Record<string, unknown>[];
+  warnings: string[];
+}
+
+export interface HonchoPeerCardRequest {
+  profile: string;
+  peerId: string;
+  card: string[];
+}
+
+export interface HonchoConclusionRequest {
+  profile: string;
+  peerId: string;
+  conclusion: string;
+}
+
+export interface HonchoWriteResponse {
+  profile: string;
+  result: Record<string, unknown>;
 }
 
 export interface WikiLintResponse {
