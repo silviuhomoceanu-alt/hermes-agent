@@ -292,6 +292,18 @@ export const api = {
     ),
   getMemoryAudit: (limit = 50) =>
     fetchJSON<MemoryAuditResponse>(`/api/memory/audit?limit=${encodeURIComponent(String(limit))}`),
+  linkMemoryNodes: (body: MemoryLinkRequest) =>
+    fetchJSON<MemoryLinkResponse>("/api/memory/link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  unlinkMemoryNodes: (body: MemoryLinkRequest) =>
+    fetchJSON<MemoryUnlinkResponse>("/api/memory/unlink", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getWikiTree: (profile = "default") =>
     fetchJSON<WikiTreeResponse>(`/api/memory/wiki/tree?profile=${encodeURIComponent(profile)}`),
   getWikiPage: (profile: string, path: string) => {
@@ -1014,7 +1026,7 @@ export interface MemoryProfileInfo {
 
 export interface MemoryNode {
   id: string;
-  source: "hermes" | "honcho" | "wiki" | "derived";
+  source: "hermes" | "honcho" | "wiki" | "derived" | "manual";
   kind: string;
   label: string;
   summary?: string;
@@ -1024,7 +1036,7 @@ export interface MemoryNode {
 
 export interface MemoryEdge {
   id: string;
-  source: "hermes" | "honcho" | "wiki" | "derived";
+  source: "hermes" | "honcho" | "wiki" | "derived" | "manual";
   from: string;
   to: string;
   kind: string;
@@ -1069,6 +1081,38 @@ export interface MemorySearchResult {
 
 export interface MemorySearchResponse {
   results: MemorySearchResult[];
+}
+
+
+export interface MemoryManualLink {
+  id: string;
+  profile: string;
+  from: string;
+  to: string;
+  kind: "manual_link" | "curated_link";
+  label?: string;
+}
+
+export interface MemoryLinkRequest {
+  profile?: string;
+  fromNodeId?: string;
+  toNodeId?: string;
+  kind?: "manual_link" | "curated_link";
+  label?: string;
+  linkId?: string;
+}
+
+export interface MemoryLinkResponse {
+  profile: string;
+  link: MemoryManualLink;
+  links: MemoryManualLink[];
+}
+
+export interface MemoryUnlinkResponse {
+  profile: string;
+  removed: number;
+  linkId: string;
+  links: MemoryManualLink[];
 }
 
 export type HermesMemoryTarget = "user" | "memory";

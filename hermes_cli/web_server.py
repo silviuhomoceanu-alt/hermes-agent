@@ -2673,6 +2673,14 @@ def _is_allowed_report_path(path: Path) -> bool:
             continue
     return False
 
+class MemoryLinkRequest(BaseModel):
+    profile: str = "default"
+    fromNodeId: Optional[str] = None
+    toNodeId: Optional[str] = None
+    kind: str = "manual_link"
+    label: Optional[str] = None
+    linkId: Optional[str] = None
+
 
 @app.get("/api/memory/profiles")
 async def get_memory_profiles():
@@ -2711,6 +2719,56 @@ async def search_memory(q: str, profiles: str = "all", limit: int = 50):
 
     safe_limit = max(1, min(int(limit), 200))
     return {"results": MemoryWorkbench().search(q, profiles=profiles, limit=safe_limit)}
+
+
+@app.post("/api/memory/link")
+async def post_memory_link(request: MemoryLinkRequest):
+    from hermes_cli.memory_workbench import MemoryWorkbench
+
+    try:
+        result = MemoryWorkbench().link_nodes(
+            request.profile,
+            request.fromNodeId or "",
+            request.toNodeId or "",
+            kind=request.kind,
+            label=request.label,
+        )
+        _audit_memory_workbench(
+            result["profile"],
+            "manual",
+            "link",
+            success=True,
+            details={"link_id": result["link"].get("id"), "from": request.fromNodeId, "to": request.toNodeId, "kind": request.kind},
+        )
+        return result
+    except ValueError as exc:
+        _audit_memory_workbench(request.profile, "manual", "link", success=False, details={"from": request.fromNodeId, "to": request.toNodeId, "kind": request.kind}, error=str(exc))
+        raise _memory_error(exc)
+
+
+@app.post("/api/memory/unlink")
+async def post_memory_unlink(request: MemoryLinkRequest):
+    from hermes_cli.memory_workbench import MemoryWorkbench
+
+    try:
+        result = MemoryWorkbench().unlink_nodes(
+            request.profile,
+            link_id=request.linkId,
+            from_node_id=request.fromNodeId,
+            to_node_id=request.toNodeId,
+            kind=request.kind,
+        )
+        _audit_memory_workbench(
+            result["profile"],
+            "manual",
+            "unlink",
+            success=True,
+            details={"link_id": result.get("linkId"), "removed": result.get("removed")},
+        )
+        return result
+    except ValueError as exc:
+        _audit_memory_workbench(request.profile, "manual", "unlink", success=False, details={"link_id": request.linkId, "from": request.fromNodeId, "to": request.toNodeId, "kind": request.kind}, error=str(exc))
+        raise _memory_error(exc)
 
 
 @app.get("/api/memory/wiki/tree")
@@ -2752,6 +2810,15 @@ async def get_memory_wiki_lint(profile: str = "default"):
     except ValueError as exc:
         raise _memory_error(exc)
 
+
+
+class MemoryLinkRequest(BaseModel):
+    profile: str = "default"
+    fromNodeId: Optional[str] = None
+    toNodeId: Optional[str] = None
+    kind: str = "manual_link"
+    label: Optional[str] = None
+    linkId: Optional[str] = None
 
 
 class WikiPageWriteRequest(BaseModel):

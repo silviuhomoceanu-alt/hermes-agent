@@ -7,6 +7,8 @@ single graph shape suitable for an Obsidian-style dashboard page.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any, Iterable
@@ -86,6 +88,8 @@ class MemoryWorkbench:
                     wiki_paths_seen.add(wiki_root)
                 wiki_id = self._wiki_root_id(wiki_root)
                 add_edge(self._edge(profile_id, wiki_id, "uses_wiki", "hermes"))
+
+        self._add_manual_links(selected, nodes, edges, warnings)
 
         if include_derived_edges:
             self._add_text_mention_edges(nodes, edges)
@@ -292,6 +296,161 @@ class MemoryWorkbench:
             # Message pagination varies across Honcho releases; keep the type in the schema but
             # do not risk expensive crawling until the user toggles it in a later editing phase.
             pass
+
+
+    # ------------------------------------------------------------------
+    # Manual cross-store links
+    # ------------------------------------------------------------------
+    def link_nodes(
+        self,
+        profile: str,
+        from_node_id: str,
+        to_node_id: str,
+        *,
+        kind: str = "manual_link",
+        label: str | None = None,
+    ) -> dict[str, Any]:
+        record = self._require_profile(profile)
+        from_id = self._require_node_id(from_node_id, "fromNodeId")
+        to_id = self._require_node_id(to_node_id, "toNodeId")
+        edge_kind = self._normalize_manual_edge_kind(kind)
+        link = {
+            "id": self._manual_link_id(record.name, from_id, to_id, edge_kind),
+            "profile": record.name,
+            "from": from_id,
+            "to": to_id,
+            "kind": edge_kind,
+        }
+        if label and label.strip():
+            link["label"] = label.strip()[:160]
+        data = self._read_manual_links()
+        links = self._profile_links(data, record.name)
+        existing = next((item for item in links if item.get("id") == link["id"]), None)
+        if existing:
+            existing.update(link)
+            saved = existing
+        else:
+            links.append(link)
+            saved = link
+        self._write_manual_links(data)
+        return {"profile": record.name, "link": saved, "links": links}
+
+    def unlink_nodes(
+        self,
+        profile: str,
+        *,
+        link_id: str | None = None,
+        from_node_id: str | None = None,
+        to_node_id: str | None = None,
+        kind: str = "manual_link",
+    ) -> dict[str, Any]:
+        record = self._require_profile(profile)
+        edge_kind = self._normalize_manual_edge_kind(kind)
+        data = self._read_manual_links()
+        links = self._profile_links(data, record.name)
+        target_id = link_id.strip() if isinstance(link_id, str) and link_id.strip() else None
+        if not target_id:
+            if not from_node_id or not to_node_id:
+                raise ValueError("unlink requires linkId or fromNodeId and toNodeId")
+            target_id = self._manual_link_id(
+                record.name,
+                self._require_node_id(from_node_id, "fromNodeId"),
+                self._require_node_id(to_node_id, "toNodeId"),
+                edge_kind,
+            )
+        kept = [item for item in links if item.get("id") != target_id]
+        removed = len(links) - len(kept)
+        data.setdefault("profiles", {})[record.name] = kept
+        self._write_manual_links(data)
+        return {"profile": record.name, "removed": removed, "linkId": target_id, "links": kept}
+
+    def _add_manual_links(self, profiles: list[ProfileRecord], nodes: dict[str, dict[str, Any]], edges: dict[str, dict[str, Any]], warnings: list[str]) -> None:
+        data = self._read_manual_links()
+        profile_names = {profile.name for profile in profiles}
+        raw_profiles = data.get("profiles") if isinstance(data.get("profiles"), dict) else {}
+        for profile_name in sorted(profile_names):
+            raw_links = raw_profiles.get(profile_name, [])
+            if not isinstance(raw_links, list):
+                warnings.append(f"Manual links for profile {profile_name} are malformed")
+                continue
+            for item in raw_links:
+                if not isinstance(item, dict):
+                    continue
+                from_id = str(item.get("from") or "")
+                to_id = str(item.get("to") or "")
+                kind = str(item.get("kind") or "manual_link")
+                link_id = str(item.get("id") or self._manual_link_id(profile_name, from_id, to_id, kind))
+                if from_id not in nodes or to_id not in nodes:
+                    warnings.append(f"Manual link {link_id} references missing node(s)")
+                    continue
+                edges.setdefault(link_id, {
+                    "id": link_id,
+                    "source": "manual",
+                    "from": from_id,
+                    "to": to_id,
+                    "kind": kind,
+                    "metadata": {"profile": profile_name, "label": item.get("label")},
+                })
+
+    def _manual_links_path(self) -> Path:
+        return self.root / "memory-workbench" / "links.json"
+
+    def _read_manual_links(self) -> dict[str, Any]:
+        path = self._manual_links_path()
+        if not path.is_file():
+            return {"version": 1, "profiles": {}}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ValueError(f"Invalid manual links file: {path}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError(f"Invalid manual links file: {path}")
+        if not isinstance(data.get("profiles"), dict):
+            data["profiles"] = {}
+        data.setdefault("version", 1)
+        return data
+
+    def _write_manual_links(self, data: dict[str, Any]) -> None:
+        path = self._manual_links_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp.replace(path)
+
+    @staticmethod
+    def _profile_links(data: dict[str, Any], profile: str) -> list[dict[str, Any]]:
+        profiles = data.setdefault("profiles", {})
+        links = profiles.setdefault(profile, [])
+        if not isinstance(links, list):
+            raise ValueError(f"Manual links for profile {profile} are malformed")
+        return links
+
+    def _require_profile(self, profile: str) -> ProfileRecord:
+        selected = self.sources.select_profiles(profile)
+        if len(selected) != 1:
+            raise ValueError(f"Expected exactly one profile, got: {profile}")
+        return selected[0]
+
+    @staticmethod
+    def _require_node_id(node_id: str, field: str) -> str:
+        value = (node_id or "").strip()
+        if not value:
+            raise ValueError(f"{field} is required")
+        if len(value) > 500:
+            raise ValueError(f"{field} is too long")
+        return value
+
+    @staticmethod
+    def _normalize_manual_edge_kind(kind: str) -> str:
+        value = (kind or "manual_link").strip().lower().replace("-", "_")
+        if value not in {"manual_link", "curated_link"}:
+            raise ValueError("Manual memory links support kind 'manual_link' or 'curated_link'")
+        return value
+
+    @staticmethod
+    def _manual_link_id(profile: str, from_node_id: str, to_node_id: str, kind: str) -> str:
+        digest = hashlib.sha256(f"{profile}\0{from_node_id}\0{to_node_id}\0{kind}".encode("utf-8")).hexdigest()[:16]
+        return f"manual:{profile}:{kind}:{digest}"
 
     # ------------------------------------------------------------------
     # Derived edges/search helpers
