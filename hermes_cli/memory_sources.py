@@ -17,7 +17,9 @@ from typing import Any, Iterable
 
 from hermes_constants import get_default_hermes_root
 
-_ENTRY_DELIMITER = "\n\n§\n\n"
+# Keep graph parsing aligned with tools.memory_tool.MemoryStore so graph entry
+# indexes match the exact ID-addressed hot-memory editing API.
+_ENTRY_DELIMITER = "\n§\n"
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 _PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 

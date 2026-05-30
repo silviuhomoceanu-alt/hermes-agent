@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-from hermes_cli.memory_workbench import MemoryWorkbench, ProfileRecord
+from hermes_cli.memory_sources import MemorySourceRegistry, ProfileRecord
 from tools.memory_tool import ENTRY_DELIMITER, MemoryStore
 
 
@@ -22,7 +22,7 @@ class HermesHotMemory:
     VALID_TARGETS = {"user", "memory"}
 
     def __init__(self, root: Path | str | None = None):
-        self.workbench = MemoryWorkbench(root=root)
+        self.sources = MemorySourceRegistry(root)
 
     def read(self, profile: str = "default") -> dict[str, Any]:
         record = self._profile(profile)
@@ -77,9 +77,11 @@ class HermesHotMemory:
         return self._response(record, result)
 
     def _profile(self, name: str) -> ProfileRecord:
-        selected = self.workbench._select_profiles(name or "default")
+        selected = self.sources.select_profiles(name or "default")
         if not selected:
             raise ValueError(f"Unknown Hermes profile: {name}")
+        if len(selected) != 1:
+            raise ValueError(f"Expected exactly one profile, got: {name}")
         return selected[0]
 
     def _target(self, target: str) -> str:

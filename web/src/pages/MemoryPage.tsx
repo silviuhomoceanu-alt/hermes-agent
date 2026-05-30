@@ -40,7 +40,7 @@ export default function MemoryPage() {
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    Promise.all([
+    return Promise.all([
       api.getMemoryProfiles(),
       api.getMemoryGraph({
         profiles: selectedProfile,

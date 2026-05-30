@@ -16,7 +16,7 @@ def test_memory_workbench_builds_unified_graph_from_profiles_and_wiki(tmp_path):
     named = root / "profiles" / "research"
     wiki = tmp_path / "wiki"
 
-    _write(default / "memories" / "USER.md", "Silviu prefers direct replies.\n\n§\n\nLives in Berlin.")
+    _write(default / "memories" / "USER.md", "Silviu prefers direct replies.\n§\nLives in Berlin.")
     _write(default / "memories" / "MEMORY.md", "Dashboard overlay branch is silviu-dashboard.")
     _write(default / ".env", f"WIKI_PATH={wiki}\n")
     _write(default / "honcho.json", '{"base_url":"http://127.0.0.1:9","workspace":"hermes","peer_id":"agent007"}')

@@ -1,17 +1,20 @@
 import { useMemo, type ReactNode } from "react";
 import { BrainCircuit, Database, FileText, Users } from "lucide-react";
 import { Badge } from "@nous-research/ui/ui/components/badge";
-import type { MemoryEdge, MemoryNode } from "@/lib/api";
+import type { MemoryEdge, MemoryNode, MemoryProfileInfo } from "@/lib/api";
 import { metadataString, SOURCE_COLORS, SOURCE_LABELS } from "./constants";
+import { HermesMemoryEditor } from "./HermesMemoryEditor";
 
 interface MemoryInspectorProps {
   node: MemoryNode | null;
   edges: MemoryEdge[];
   nodes: MemoryNode[];
+  profiles: MemoryProfileInfo[];
   onFocus: (id: string) => void;
+  onMemoryChanged: () => Promise<void> | void;
 }
 
-export function MemoryInspector({ node, edges, nodes, onFocus }: MemoryInspectorProps) {
+export function MemoryInspector({ node, edges, nodes, profiles, onFocus, onMemoryChanged }: MemoryInspectorProps) {
   const related = useMemo(() => {
     if (!node) return [];
     const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -35,6 +38,7 @@ export function MemoryInspector({ node, edges, nodes, onFocus }: MemoryInspector
   const content = metadataString(node.metadata?.content || node.summary || "");
   const path = metadataString(node.metadata?.path || node.metadata?.relative_path || "");
   const profile = metadataString(node.metadata?.profile || "");
+  const isHermesEntry = node.kind === "hermes_user_entry" || node.kind === "hermes_memory_entry";
 
   return (
     <aside className="overflow-hidden rounded border border-current/10 bg-background/45">
@@ -42,7 +46,7 @@ export function MemoryInspector({ node, edges, nodes, onFocus }: MemoryInspector
         <div className="mb-2 flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full" style={{ background: SOURCE_COLORS[node.source] ?? "#94a3b8" }} />
           <Badge tone="outline" className="text-[0.65rem]">{SOURCE_LABELS[node.source] ?? node.source}</Badge>
-          <Badge tone={node.editable ? "secondary" : "outline"} className="text-[0.65rem]">{node.editable ? "editable later" : "read-only"}</Badge>
+          <Badge tone={node.editable ? "secondary" : "outline"} className="text-[0.65rem]">{node.editable ? "editable" : "read-only"}</Badge>
         </div>
         <h2 className="break-words text-lg font-semibold leading-tight">{node.label}</h2>
         <p className="mt-1 break-all font-mono text-[0.68rem] text-foreground/35">{node.id}</p>
@@ -52,6 +56,8 @@ export function MemoryInspector({ node, edges, nodes, onFocus }: MemoryInspector
         <InfoRow icon={<Database className="h-3.5 w-3.5" />} label="Kind" value={node.kind} />
         {profile && <InfoRow icon={<Users className="h-3.5 w-3.5" />} label="Profile" value={profile} />}
         {path && <InfoRow icon={<FileText className="h-3.5 w-3.5" />} label="Path" value={path} mono />}
+
+        {isHermesEntry && <HermesMemoryEditor node={node} profiles={profiles} onChanged={onMemoryChanged} />}
 
         {content && (
           <section className="mt-4">
