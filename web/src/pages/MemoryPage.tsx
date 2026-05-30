@@ -190,6 +190,9 @@ export default function MemoryPage() {
           onModeChange={setMode}
           densitySettings={densitySettings}
           onDensitySettingsChange={setDensitySettings}
+          nodes={graph?.nodes ?? []}
+          edges={graph?.edges ?? []}
+          onFocusNode={focusNode}
         />
 
         <MemoryGraph

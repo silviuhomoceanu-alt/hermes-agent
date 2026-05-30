@@ -1,8 +1,9 @@
 import { GitBranch } from "lucide-react";
-import type { MemoryProfileInfo } from "@/lib/api";
+import type { MemoryEdge, MemoryNode, MemoryProfileInfo } from "@/lib/api";
 import { SOURCE_COLORS, SOURCE_LABELS } from "./constants";
 import { MemoryGraphSettings } from "./MemoryGraphSettings";
 import { MemoryAuditPanel } from "./MemoryAuditPanel";
+import { MemoryCurationReviewPanel } from "./MemoryCurationReviewPanel";
 import type { GraphDensitySettings, GraphMode, SourceFilter } from "./types";
 
 interface MemorySourceSidebarProps {
@@ -15,6 +16,9 @@ interface MemorySourceSidebarProps {
   onModeChange: (mode: GraphMode) => void;
   densitySettings: GraphDensitySettings;
   onDensitySettingsChange: (settings: GraphDensitySettings) => void;
+  nodes: MemoryNode[];
+  edges: MemoryEdge[];
+  onFocusNode: (id: string) => void;
 }
 
 export function MemorySourceSidebar({
@@ -27,6 +31,9 @@ export function MemorySourceSidebar({
   onModeChange,
   densitySettings,
   onDensitySettingsChange,
+  nodes,
+  edges,
+  onFocusNode,
 }: MemorySourceSidebarProps) {
   return (
     <aside className="rounded border border-current/10 bg-background/45 p-3">
@@ -72,6 +79,8 @@ export function MemorySourceSidebar({
         <LegendItem color={SOURCE_COLORS.wiki} label="LLM Wiki" />
         <LegendItem color={SOURCE_COLORS.derived} label="Derived mentions" />
       </div>
+
+      <MemoryCurationReviewPanel nodes={nodes} edges={edges} onFocus={onFocusNode} />
 
       <MemoryAuditPanel />
     </aside>
