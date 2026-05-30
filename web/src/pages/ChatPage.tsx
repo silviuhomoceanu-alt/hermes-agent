@@ -427,12 +427,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         const binary = atob(payload);
         const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
         const text = new TextDecoder("utf-8").decode(bytes);
-        navigator.clipboard.writeText(text).catch((err) => {
-          // Most common reason: the Clipboard API requires a user gesture.
-          // This can fail when the OSC 52 response arrives outside the
-          // original keydown event's activation. Log to aid debugging.
-          console.warn("[dashboard clipboard] OSC 52 write failed:", err.message);
-        });
+        writeClipboardText(text, "OSC 52 write");
       } catch {
         console.warn("[dashboard clipboard] malformed OSC 52 payload");
       }
@@ -442,6 +437,112 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     const isMac =
       typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
 
+    const writeClipboardText = (text: string, label: string) => {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).catch((err) => {
+          console.warn(`[dashboard clipboard] ${label} failed:`, err.message);
+        });
+        return true;
+      }
+
+      // Clipboard API is unavailable on insecure LAN origins. Because this
+      // runs inside the user's key gesture, the legacy copy command still
+      // works in Chromium/Safari and keeps Cmd+C usable from http://<mac-ip>.
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      try {
+        return document.execCommand("copy");
+      } catch (err) {
+        console.warn(
+          `[dashboard clipboard] ${label} fallback failed:`,
+          err instanceof Error ? err.message : String(err),
+        );
+        return false;
+      } finally {
+        textarea.remove();
+        term.focus();
+      }
+    };
+
+    const copyFromTerminalSelection = (ev: KeyboardEvent) => {
+      const sel = term.getSelection();
+      if (!sel) return false;
+
+      // Direct clipboard writes inside the keydown handler preserve the user
+      // gesture — async round-trips through OSC 52 can lose activation
+      // and fail with "Document is not focused".
+      writeClipboardText(sel, "direct copy");
+      // Clear xterm.js's highlight after copy (matches gnome-terminal).
+      term.clearSelection();
+      ev.preventDefault();
+      return true;
+    };
+
+    const canReadClipboardItems = () => !!navigator.clipboard?.read;
+
+    const pasteFromBrowserClipboard = async () => {
+      const clipboard = navigator.clipboard;
+      // Screenshot images copied via Cmd+Ctrl+Shift+4 only appear as clipboard
+      // items. If `clipboard.read()` is unavailable (common on insecure LAN
+      // origins), do NOT fall back to readText() here: preventing Cmd+V would
+      // suppress the native DOM paste event that still carries the image.
+      if (!canReadClipboardItems()) {
+        return false;
+      }
+
+      try {
+        if (clipboard.read) {
+          const items = await clipboard.read();
+          const imageFiles: File[] = [];
+          for (const item of items) {
+            const imageType = item.types.find((type) => type.startsWith("image/"));
+            if (!imageType) continue;
+            const blob = await item.getType(imageType);
+            const ext = imageType.split("/")[1] || "png";
+            imageFiles.push(new File([blob], `clipboard-image.${ext}`, { type: imageType }));
+          }
+          if (imageFiles.length > 0) {
+            stageFilesRef.current(imageFiles);
+            return true;
+          }
+        }
+        if (clipboard.readText) {
+          const text = await clipboard.readText();
+          if (text) {
+            term.paste(text);
+            return true;
+          }
+        }
+      } catch (err) {
+        console.warn(
+          "[dashboard clipboard] paste failed:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+
+      return true;
+    };
+
+    const isCopyKey = (ev: KeyboardEvent) => {
+      const key = ev.key.toLowerCase();
+      return key === "c" && (isMac ? ev.metaKey : ev.ctrlKey && ev.shiftKey);
+    };
+
+    const isPasteKey = (ev: KeyboardEvent) => {
+      const key = ev.key.toLowerCase();
+      if (key !== "v") return false;
+      return isMac
+        ? ev.metaKey || (ev.ctrlKey && !ev.shiftKey && !ev.altKey)
+        : ev.ctrlKey && ev.shiftKey;
+    };
+
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
 
@@ -450,22 +551,13 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       // konsole / Windows Terminal. Ctrl+Shift+C only copies if a selection exists;
       // without a selection it passes through to the TUI so agents can still
       // react to the keypress.
-      // Paste: Cmd+Shift+V on macOS, Ctrl+Shift+V on others.
-      const copyModifier = isMac ? ev.metaKey : ev.ctrlKey && ev.shiftKey;
-      const pasteModifier = isMac ? ev.metaKey : ev.ctrlKey && ev.shiftKey;
-
-      if (copyModifier && ev.key.toLowerCase() === "c") {
-        const sel = term.getSelection();
-        if (sel) {
-          // Direct writeText inside the keydown handler preserves the user
-          // gesture — async round-trips through OSC 52 can lose activation
-          // and fail with "Document is not focused".
-          navigator.clipboard.writeText(sel).catch((err) => {
-            console.warn("[dashboard clipboard] direct copy failed:", err.message);
-          });
-          // Clear xterm.js's highlight after copy (matches gnome-terminal).
-          term.clearSelection();
-          ev.preventDefault();
+      // Paste: Cmd+V and Ctrl+V on macOS, Ctrl+Shift+V on others.
+      // macOS users often press Ctrl+V from terminal muscle memory; if we
+      // let that fall through, the TUI tries to read the clipboard from a
+      // Python subprocess, which cannot reliably see browser-held image
+      // clipboard permissions.
+      if (isCopyKey(ev)) {
+        if (copyFromTerminalSelection(ev)) {
           return false;
         }
         // No selection → fall through so the TUI receives Ctrl+Shift+C
@@ -492,33 +584,11 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         }
       }
 
-      if (pasteModifier && ev.key.toLowerCase() === "v") {
-        void (async () => {
-          try {
-            if (navigator.clipboard.read) {
-              const items = await navigator.clipboard.read();
-              const imageFiles: File[] = [];
-              for (const item of items) {
-                const imageType = item.types.find((type) => type.startsWith("image/"));
-                if (!imageType) continue;
-                const blob = await item.getType(imageType);
-                const ext = imageType.split("/")[1] || "png";
-                imageFiles.push(new File([blob], `clipboard-image.${ext}`, { type: imageType }));
-              }
-              if (imageFiles.length > 0) {
-                stageFilesRef.current(imageFiles);
-                return;
-              }
-            }
-            const text = await navigator.clipboard.readText();
-            if (text) term.paste(text);
-          } catch (err) {
-            console.warn(
-              "[dashboard clipboard] paste failed:",
-              err instanceof Error ? err.message : String(err),
-            );
-          }
-        })();
+      if (isPasteKey(ev)) {
+        if (!canReadClipboardItems()) {
+          return true;
+        }
+        void pasteFromBrowserClipboard();
         ev.preventDefault();
         return false;
       }
@@ -553,6 +623,55 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     term.loadAddon(new WebLinksAddon());
 
     term.open(host);
+
+    const handleHostPaste = (ev: ClipboardEvent) => {
+      const items = Array.from(ev.clipboardData?.items ?? []);
+      const imageFiles: File[] = [];
+      for (const item of items) {
+        if (!item.type.startsWith("image/")) continue;
+        const file = item.getAsFile();
+        if (!file) continue;
+        const ext = item.type.split("/")[1] || "png";
+        imageFiles.push(
+          new File([file], file.name || `clipboard-image.${ext}`, { type: item.type }),
+        );
+      }
+      if (imageFiles.length > 0) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        stageFilesRef.current(imageFiles);
+        return;
+      }
+
+      // When async Clipboard is unavailable (common on http://<LAN-IP>),
+      // allow the native paste event to be the text source instead. Do not
+      // block plain text paste unless we actually inject it into xterm.
+      const text = ev.clipboardData?.getData("text/plain") ?? "";
+      if (text) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        term.paste(text);
+      }
+    };
+
+    const handleHostKeyDown = (ev: KeyboardEvent) => {
+      // Some browser/xterm combinations on macOS consume Cmd+C/V before
+      // xterm's custom key handler sees them. Capture at the host DOM layer
+      // too, so dashboard clipboard behavior matches normal macOS muscle memory.
+      if (isCopyKey(ev)) {
+        copyFromTerminalSelection(ev);
+        return;
+      }
+
+      if (isPasteKey(ev) && canReadClipboardItems()) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        void pasteFromBrowserClipboard();
+      }
+    };
+
+    host.addEventListener("paste", handleHostPaste);
+    host.addEventListener("keydown", handleHostKeyDown, { capture: true });
 
     // WebGL draws from a texture atlas sized with device pixels. On phones and
     // in DevTools device mode that often produces *visually* much larger cells
@@ -771,6 +890,8 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         "resize",
         scheduleSyncTerminalMetrics,
       );
+      host.removeEventListener("paste", handleHostPaste);
+      host.removeEventListener("keydown", handleHostKeyDown, { capture: true });
       ro.disconnect();
       if (hostSyncRaf) cancelAnimationFrame(hostSyncRaf);
       if (settleRaf1) cancelAnimationFrame(settleRaf1);
