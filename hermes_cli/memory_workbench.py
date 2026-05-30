@@ -8,41 +8,28 @@ single graph shape suitable for an Obsidian-style dashboard page.
 from __future__ import annotations
 
 import json
-import os
 import re
-import urllib.error
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from hermes_constants import get_default_hermes_root
+from hermes_cli.memory_sources import MemorySourceRegistry, ProfileRecord
 
-_ENTRY_DELIMITER = "\n\n§\n\n"
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
-_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
-
-
-@dataclass(frozen=True)
-class ProfileRecord:
-    name: str
-    path: Path
-    is_default: bool = False
-    wiki_path: Path | None = None
-    honcho_config: dict[str, Any] | None = None
 
 
 class MemoryWorkbench:
     """Build read-only memory overview/search/graph data for the dashboard."""
 
     def __init__(self, root: Path | str | None = None):
-        self.root = Path(root).expanduser() if root is not None else get_default_hermes_root()
+        self.sources = MemorySourceRegistry(root)
+        self.root = self.sources.root
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
     def list_profiles(self) -> list[dict[str, Any]]:
-        return [self._profile_to_dict(profile) for profile in self._discover_profiles()]
+        return [self._profile_to_dict(profile) for profile in self.sources.discover_profiles()]
 
     def build_overview(self) -> dict[str, Any]:
         graph = self.build_graph(include_messages=False, include_raw_sources=True)
@@ -60,7 +47,7 @@ class MemoryWorkbench:
         include_raw_sources: bool = True,
         include_derived_edges: bool = True,
     ) -> dict[str, Any]:
-        selected = self._select_profiles(profiles)
+        selected = self.sources.select_profiles(profiles)
         nodes: dict[str, dict[str, Any]] = {}
         edges: dict[str, dict[str, Any]] = {}
         warnings: list[str] = []
@@ -142,57 +129,13 @@ class MemoryWorkbench:
         return results[:limit]
 
     # ------------------------------------------------------------------
-    # Profile discovery/config
-    # ------------------------------------------------------------------
-    def _discover_profiles(self) -> list[ProfileRecord]:
-        profiles: list[ProfileRecord] = []
-        if self.root.is_dir():
-            profiles.append(self._make_profile("default", self.root, True))
-        profiles_root = self.root / "profiles"
-        if profiles_root.is_dir():
-            for item in sorted(profiles_root.iterdir(), key=lambda p: p.name):
-                if item.is_dir() and re.match(r"^[a-z0-9][a-z0-9_-]{0,63}$", item.name):
-                    profiles.append(self._make_profile(item.name, item, False))
-        return profiles
-
-    def _make_profile(self, name: str, path: Path, is_default: bool) -> ProfileRecord:
-        return ProfileRecord(
-            name=name,
-            path=path,
-            is_default=is_default,
-            wiki_path=self._resolve_wiki_path(path),
-            honcho_config=self._read_json(path / "honcho.json"),
-        )
-
-    def _select_profiles(self, profiles: str | Iterable[str]) -> list[ProfileRecord]:
-        discovered = self._discover_profiles()
-        if profiles == "all":
-            return discovered
-        wanted = {p.strip() for p in profiles.split(",")} if isinstance(profiles, str) else {str(p).strip() for p in profiles}
-        return [p for p in discovered if p.name in wanted]
-
-    def _resolve_wiki_path(self, profile_path: Path) -> Path | None:
-        env = self._read_dotenv(profile_path / ".env")
-        if env.get("WIKI_PATH"):
-            return Path(env["WIKI_PATH"]).expanduser()
-        cfg = self._read_yaml(profile_path / "config.yaml")
-        for key in ("wiki_path", "llm_wiki_path"):
-            if isinstance(cfg.get(key), str) and cfg[key].strip():
-                return Path(cfg[key]).expanduser()
-        wiki_cfg = cfg.get("wiki") if isinstance(cfg, dict) else None
-        if isinstance(wiki_cfg, dict) and isinstance(wiki_cfg.get("path"), str):
-            return Path(wiki_cfg["path"]).expanduser()
-        default = Path(os.environ.get("WIKI_PATH", "") or str(Path.home() / "wiki")).expanduser()
-        return default if default.exists() or profile_path == self.root else default
-
-    # ------------------------------------------------------------------
     # Hermes hot memory
     # ------------------------------------------------------------------
     def _add_hermes_memory(self, profile: ProfileRecord, profile_id: str, add_node, add_edge) -> None:
         specs = [("user", "USER.md", "hermes_user_entry"), ("memory", "MEMORY.md", "hermes_memory_entry")]
         for target, filename, kind in specs:
             path = profile.path / "memories" / filename
-            entries = self._read_memory_entries(path)
+            entries = self.sources.read_memory_entries(path)
             store_id = f"hermes:{profile.name}:{target}"
             add_node({
                 "id": store_id,
@@ -215,15 +158,6 @@ class MemoryWorkbench:
                     "metadata": {"profile": profile.name, "target": target, "index": idx, "path": str(path), "content": entry},
                 })
                 add_edge(self._edge(store_id, node_id, "contains", "hermes"))
-
-    def _read_memory_entries(self, path: Path) -> list[str]:
-        if not path.is_file():
-            return []
-        text = path.read_text(encoding="utf-8", errors="replace").strip()
-        if not text:
-            return []
-        parts = [part.strip() for part in text.split(_ENTRY_DELIMITER)]
-        return [part for part in parts if part]
 
     # ------------------------------------------------------------------
     # LLM Wiki
@@ -253,7 +187,7 @@ class MemoryWorkbench:
             if is_raw and not include_raw_sources:
                 continue
             text = path.read_text(encoding="utf-8", errors="replace")
-            fm, body = self._split_frontmatter(text)
+            fm, body = self.sources.split_frontmatter(text)
             title = str(fm.get("title") or path.stem.replace("-", " ").title())
             kind = "wiki_raw_source" if is_raw else "wiki_page"
             node_id = self._wiki_page_id(wiki_root, rel)
@@ -276,14 +210,14 @@ class MemoryWorkbench:
                 add_node({"id": folder_id, "source": "wiki", "kind": "wiki_folder", "label": folder, "editable": False, "metadata": {"path": folder}})
                 add_edge(self._edge(root_id, folder_id, "contains", "wiki"))
                 add_edge(self._edge(folder_id, node_id, "folder_contains", "wiki"))
-            for tag in self._as_list(fm.get("tags")):
+            for tag in self.sources.as_list(fm.get("tags")):
                 tag_id = f"wiki-tag:{tag}"
                 add_node({"id": tag_id, "source": "wiki", "kind": "wiki_tag", "label": str(tag), "editable": False, "metadata": {}})
                 add_edge(self._edge(node_id, tag_id, "tagged", "wiki"))
 
         for _path, rel, fm, body in pages:
             node_id = self._wiki_page_id(wiki_root, rel)
-            for source in self._as_list(fm.get("sources")):
+            for source in self.sources.as_list(fm.get("sources")):
                 source_rel = str(source).strip()
                 target = page_by_rel_no_ext.get(source_rel.removesuffix(".md").lower())
                 if target:
@@ -341,7 +275,7 @@ class MemoryWorkbench:
         # Best-effort live probe. Fail soft; dashboard must load if Honcho is offline.
         try:
             peers = self._honcho_post(base_url, f"/v3/workspaces/{workspace}/peers/list", {})
-            for peer in self._extract_items(peers):
+            for peer in self.sources.extract_items(peers):
                 pid = str(peer.get("id") or peer.get("peer_id") or peer.get("name") or "").strip()
                 if not pid:
                     continue
@@ -352,7 +286,7 @@ class MemoryWorkbench:
             warnings.append(f"Honcho unavailable for profile {profile.name}: {exc}")
         try:
             conclusions = self._honcho_post(base_url, f"/v3/workspaces/{workspace}/conclusions/list", {})
-            for item in self._extract_items(conclusions):
+            for item in self.sources.extract_items(conclusions):
                 cid = str(item.get("id") or item.get("uuid") or len(str(item)))
                 text = str(item.get("content") or item.get("conclusion") or item.get("text") or item)
                 node_id = f"honcho:{profile.name}:conclusion:{cid}"
@@ -415,80 +349,3 @@ class MemoryWorkbench:
         prefix = "…" if start else ""
         suffix = "…" if end < len(text) else ""
         return prefix + text[start:end].strip() + suffix
-
-    @staticmethod
-    def _read_dotenv(path: Path) -> dict[str, str]:
-        values: dict[str, str] = {}
-        if not path.is_file():
-            return values
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            values[key.strip()] = value.strip().strip('"').strip("'")
-        return values
-
-    @staticmethod
-    def _read_json(path: Path) -> dict[str, Any] | None:
-        if not path.is_file():
-            return None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else None
-        except Exception:
-            return None
-
-    @staticmethod
-    def _read_yaml(path: Path) -> dict[str, Any]:
-        if not path.is_file():
-            return {}
-        try:
-            import yaml
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
-
-    @staticmethod
-    def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-        match = _FRONTMATTER_RE.match(text)
-        if not match:
-            return {}, text
-        body = text[match.end():]
-        raw = match.group(1)
-        try:
-            import yaml
-            data = yaml.safe_load(raw) or {}
-            return (data if isinstance(data, dict) else {}), body
-        except Exception:
-            fm: dict[str, Any] = {}
-            for line in raw.splitlines():
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    fm[key.strip()] = value.strip()
-            return fm, body
-
-    @staticmethod
-    def _as_list(value: Any) -> list[Any]:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return value
-        if isinstance(value, str):
-            stripped = value.strip()
-            if stripped.startswith("[") and stripped.endswith("]"):
-                return [p.strip().strip('"\'') for p in stripped[1:-1].split(",") if p.strip()]
-            return [stripped] if stripped else []
-        return [value]
-
-    @staticmethod
-    def _extract_items(data: Any) -> list[dict[str, Any]]:
-        if isinstance(data, list):
-            return [x for x in data if isinstance(x, dict)]
-        if isinstance(data, dict):
-            for key in ("items", "results", "peers", "conclusions", "data"):
-                value = data.get(key)
-                if isinstance(value, list):
-                    return [x for x in value if isinstance(x, dict)]
-        return []

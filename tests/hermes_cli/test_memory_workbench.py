@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from hermes_cli.memory_sources import MemorySourceRegistry
 from hermes_cli.memory_workbench import MemoryWorkbench
 
 
@@ -84,3 +85,23 @@ def test_memory_workbench_search_returns_merged_results(tmp_path):
     assert any(r["source"] == "hermes" and r["profile"] == "default" for r in results)
     assert any(r["source"] == "wiki" and r["title"] == "Communication" for r in results)
     assert all("anti-fluff" in r["snippet"].lower() for r in results)
+
+
+def test_memory_source_registry_reuses_profile_resolution_helpers(tmp_path):
+    root = tmp_path / ".hermes"
+    named = root / "profiles" / "research"
+    wiki = tmp_path / "wiki"
+    ignored = root / "profiles" / "Invalid Name"
+
+    _write(root / ".env", f"WIKI_PATH={wiki}\n")
+    _write(named / "config.yaml", f"wiki:\n  path: {wiki / 'research'}\n")
+    ignored.mkdir(parents=True)
+
+    registry = MemorySourceRegistry(root=root)
+    profiles = registry.discover_profiles()
+    profile_names = [profile.name for profile in profiles]
+
+    assert profile_names == ["default", "research"]
+    assert profiles[0].wiki_path == wiki
+    assert profiles[1].wiki_path == wiki / "research"
+    assert [profile.name for profile in registry.select_profiles("research")] == ["research"]
