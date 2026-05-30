@@ -303,9 +303,9 @@ function SessionRow({
 
       {resumeInChatEnabled && (
         <Button
-          ghost
-          size="icon"
-          className="text-muted-foreground hover:text-success"
+          outlined
+          size="sm"
+          className="shrink-0 text-success hover:text-success"
           aria-label={t.sessions.resumeInChat}
           title={t.sessions.resumeInChat}
           onClick={(e) => {
@@ -313,7 +313,9 @@ function SessionRow({
             navigate(`/chat?resume=${encodeURIComponent(session.id)}`);
           }}
         >
-          <Play />
+          <Play className="mr-1 h-3 w-3" />
+          <span className="hidden lg:inline">{t.sessions.resumeInChat}</span>
+          <span className="lg:hidden">{t.sessions.resumeInChat}</span>
         </Button>
       )}
 
@@ -496,6 +498,7 @@ export default function SessionsPage() {
   const { t } = useI18n();
   const { setAfterTitle } = usePageHeader();
   const { activeAction, actionStatus, dismissLog } = useSystemActions();
+  const navigate = useNavigate();
   const resumeInChatEnabled = isDashboardEmbeddedChatEnabled();
 
   useLayoutEffect(() => {
@@ -907,13 +910,28 @@ export default function SessionsPage() {
                       )}
                     </div>
 
-                    <Badge
-                      tone="outline"
-                      className="shrink-0 self-start text-xs sm:self-center"
-                    >
-                      <Database className="mr-1 h-3 w-3" />
-                      {s.source ?? "local"}
-                    </Badge>
+                    <div className="flex shrink-0 flex-wrap items-center gap-2 self-start sm:self-center">
+                      <Badge tone="outline" className="text-xs">
+                        <Database className="mr-1 h-3 w-3" />
+                        {s.source ?? "local"}
+                      </Badge>
+
+                      {resumeInChatEnabled && (
+                        <Button
+                          outlined
+                          size="sm"
+                          className="shrink-0 text-success hover:text-success"
+                          aria-label={t.sessions.resumeInChat}
+                          title={t.sessions.resumeInChat}
+                          onClick={() =>
+                            navigate(`/chat?resume=${encodeURIComponent(s.id)}`)
+                          }
+                        >
+                          <Play className="mr-1 h-3 w-3" />
+                          {t.sessions.resumeInChat}
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </CardContent>
