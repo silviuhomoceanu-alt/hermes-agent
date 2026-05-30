@@ -49,9 +49,11 @@ def gated_app():
     prev_host = getattr(web_server.app.state, "bound_host", None)
     prev_port = getattr(web_server.app.state, "bound_port", None)
     prev_required = getattr(web_server.app.state, "auth_required", None)
+    prev_allow_public = getattr(web_server.app.state, "allow_public", None)
     web_server.app.state.bound_host = "fly-app.fly.dev"
     web_server.app.state.bound_port = 443
     web_server.app.state.auth_required = True
+    web_server.app.state.allow_public = False
     client = TestClient(web_server.app, base_url="https://fly-app.fly.dev")
     yield client
     clear_providers()
@@ -59,6 +61,7 @@ def gated_app():
     web_server.app.state.bound_host = prev_host
     web_server.app.state.bound_port = prev_port
     web_server.app.state.auth_required = prev_required
+    web_server.app.state.allow_public = prev_allow_public
 
 
 @pytest.fixture
@@ -69,15 +72,40 @@ def loopback_app():
     prev_host = getattr(web_server.app.state, "bound_host", None)
     prev_port = getattr(web_server.app.state, "bound_port", None)
     prev_required = getattr(web_server.app.state, "auth_required", None)
+    prev_allow_public = getattr(web_server.app.state, "allow_public", None)
     web_server.app.state.bound_host = "127.0.0.1"
     web_server.app.state.bound_port = 8080
     web_server.app.state.auth_required = False
+    web_server.app.state.allow_public = False
     client = TestClient(web_server.app, base_url="http://127.0.0.1:8080")
     yield client
     _reset_for_tests()
     web_server.app.state.bound_host = prev_host
     web_server.app.state.bound_port = prev_port
     web_server.app.state.auth_required = prev_required
+    web_server.app.state.allow_public = prev_allow_public
+
+
+@pytest.fixture
+def insecure_lan_app():
+    """web_server.app configured for --host 0.0.0.0 --insecure."""
+    _reset_for_tests()
+    clear_providers()
+    prev_host = getattr(web_server.app.state, "bound_host", None)
+    prev_port = getattr(web_server.app.state, "bound_port", None)
+    prev_required = getattr(web_server.app.state, "auth_required", None)
+    prev_allow_public = getattr(web_server.app.state, "allow_public", None)
+    web_server.app.state.bound_host = "0.0.0.0"
+    web_server.app.state.bound_port = 8080
+    web_server.app.state.auth_required = False
+    web_server.app.state.allow_public = True
+    client = TestClient(web_server.app, base_url="http://192.168.1.10:8080")
+    yield client
+    _reset_for_tests()
+    web_server.app.state.bound_host = prev_host
+    web_server.app.state.bound_port = prev_port
+    web_server.app.state.auth_required = prev_required
+    web_server.app.state.allow_public = prev_allow_public
 
 
 @pytest.fixture
@@ -88,15 +116,18 @@ def insecure_public_app():
     prev_host = getattr(web_server.app.state, "bound_host", None)
     prev_port = getattr(web_server.app.state, "bound_port", None)
     prev_required = getattr(web_server.app.state, "auth_required", None)
+    prev_allow_public = getattr(web_server.app.state, "allow_public", None)
     web_server.app.state.bound_host = "0.0.0.0"
     web_server.app.state.bound_port = 9120
     web_server.app.state.auth_required = False
+    web_server.app.state.allow_public = True
     client = TestClient(web_server.app, base_url="http://192.168.0.222:9120")
     yield client
     _reset_for_tests()
     web_server.app.state.bound_host = prev_host
     web_server.app.state.bound_port = prev_port
     web_server.app.state.auth_required = prev_required
+    web_server.app.state.allow_public = prev_allow_public
 
 
 def _logged_in(client: TestClient) -> None:
@@ -175,15 +206,18 @@ def insecure_explicit_host_app():
     prev_host = getattr(web_server.app.state, "bound_host", None)
     prev_port = getattr(web_server.app.state, "bound_port", None)
     prev_required = getattr(web_server.app.state, "auth_required", None)
+    prev_allow_public = getattr(web_server.app.state, "allow_public", None)
     web_server.app.state.bound_host = "100.64.0.10"
     web_server.app.state.bound_port = 9119
     web_server.app.state.auth_required = False
+    web_server.app.state.allow_public = True
     client = TestClient(web_server.app, base_url="http://100.64.0.10:9119")
     yield client
     _reset_for_tests()
     web_server.app.state.bound_host = prev_host
     web_server.app.state.bound_port = prev_port
     web_server.app.state.auth_required = prev_required
+    web_server.app.state.allow_public = prev_allow_public
 
 
 def _fake_ws(*, query: dict, client_host: str = "127.0.0.1", path: str = "/api/pty"):
@@ -286,22 +320,13 @@ class TestWsAuthOkGated:
 
 
 class TestWsRequestIsAllowedGated:
-    """Bug fix: in gated mode, the WS peer-IP loopback check must be
-    bypassed.
+    """Bug fix: in gated/public modes, the WS peer-IP loopback check must
+    be bypassed.
 
-    When the OAuth gate is active, ``start_server`` runs uvicorn with
-    ``proxy_headers=True`` so the dashboard can honour
-    ``X-Forwarded-Proto`` from Fly's TLS terminator. A side effect is that
-    ``ws.client.host`` is rewritten to the X-Forwarded-For value — the
-    real internet client IP, never loopback. The loopback peer guard
-    (intended only for unauthenticated loopback dev) must not also reject
-    those upgrades: the OAuth gate + single-use ticket is the auth.
-
-    Regression coverage: every WS endpoint (``/api/pty``, ``/api/ws``,
-    ``/api/pub``, ``/api/events``) calls ``_ws_request_is_allowed`` after
-    ``_ws_auth_ok``. If the peer-IP check rejects gated mode, the chat
-    tab + sidebar tool feed silently fail to connect even after a
-    successful OAuth login.
+    Gated deployments use the OAuth gate + single-use tickets as auth, and
+    public/LAN ``--insecure`` deployments are an explicit operator opt-in.
+    In both cases the Host/Origin guard remains responsible for
+    DNS-rebinding protection.
     """
 
     def test_non_loopback_peer_allowed_in_gated_mode(self, gated_app):
@@ -324,14 +349,17 @@ class TestWsRequestIsAllowedGated:
         ws.headers = {"host": "127.0.0.1:8080"}
         assert web_server._ws_request_is_allowed(ws) is True
 
-    def test_non_loopback_peer_allowed_in_insecure_public_mode(self, insecure_public_app):
-        """`--host 0.0.0.0 --insecure` is an explicit LAN/public opt-in.
+    def test_non_loopback_peer_allowed_in_insecure_lan_mode(self, insecure_lan_app):
+        """--insecure all-interface binds must allow LAN WS upgrades too."""
+        ws = _fake_ws(query={}, client_host="192.168.1.42")
+        ws.headers = {
+            "host": "192.168.1.10:8080",
+            "origin": "http://192.168.1.10:8080",
+        }
+        assert web_server._ws_request_is_allowed(ws) is True
 
-        Regression coverage for the dashboard `/chat` breakage where the
-        HTML shell loaded on 9120 but every WebSocket upgrade was rejected
-        with 403 because the loopback-only peer guard still ran even though
-        the operator intentionally exposed the dashboard on all interfaces.
-        """
+    def test_non_loopback_peer_allowed_in_insecure_public_mode(self, insecure_public_app):
+        """`--host 0.0.0.0 --insecure` is an explicit LAN/public opt-in."""
         ws = _fake_ws(query={}, client_host="192.168.0.55")
         ws.headers = {
             "host": "192.168.0.222:9120",
@@ -340,13 +368,7 @@ class TestWsRequestIsAllowedGated:
         assert web_server._ws_request_is_allowed(ws) is True
 
     def test_peer_allowed_on_explicit_non_loopback_bind(self, insecure_explicit_host_app):
-        """`--host 100.64.0.10 --insecure` (Tailscale/LAN IP) is an explicit
-        non-loopback opt-in too — not just the 0.0.0.0 wildcard.
-
-        Regression coverage: the merged 0.0.0.0/:: fix did not cover binding
-        directly to a specific tailnet/LAN address, so `/chat` HTML loaded but
-        WS upgrades were still rejected by the loopback-only peer guard.
-        """
+        """`--host 100.64.0.10 --insecure` is an explicit opt-in too."""
         ws = _fake_ws(query={}, client_host="100.64.0.99")
         ws.headers = {
             "host": "100.64.0.10:9119",
@@ -357,11 +379,7 @@ class TestWsRequestIsAllowedGated:
     def test_rebinding_host_rejected_on_explicit_non_loopback_bind(
         self, insecure_explicit_host_app
     ):
-        """Lifting the peer-IP gate for an explicit bind must NOT lift the
-        DNS-rebinding Host guard: a mismatched Host header is still rejected,
-        because an explicit non-loopback bind requires an exact Host match in
-        `_is_accepted_host` (unlike the 0.0.0.0 wildcard, which accepts any).
-        """
+        """Lifting the peer-IP gate must NOT lift the Host guard."""
         ws = _fake_ws(query={}, client_host="100.64.0.99")
         ws.headers = {"host": "evil.example.com"}
         assert web_server._ws_request_is_allowed(ws) is False
