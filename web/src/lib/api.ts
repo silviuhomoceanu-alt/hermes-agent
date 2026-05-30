@@ -290,6 +290,18 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
+  getWikiTree: (profile = "default") =>
+    fetchJSON<WikiTreeResponse>(`/api/memory/wiki/tree?profile=${encodeURIComponent(profile)}`),
+  getWikiPage: (profile: string, path: string) => {
+    const qs = new URLSearchParams({ profile, path });
+    return fetchJSON<WikiPageResponse>(`/api/memory/wiki/page?${qs.toString()}`);
+  },
+  getWikiBacklinks: (profile: string, path: string) => {
+    const qs = new URLSearchParams({ profile, path });
+    return fetchJSON<WikiBacklinksResponse>(`/api/memory/wiki/backlinks?${qs.toString()}`);
+  },
+  getWikiLint: (profile = "default") =>
+    fetchJSON<WikiLintResponse>(`/api/memory/wiki/lint?profile=${encodeURIComponent(profile)}`),
   getReportDownloadUrl: (path: string) => {
     const qs = new URLSearchParams({ path });
     const token = window.__HERMES_SESSION_TOKEN__;
@@ -1057,6 +1069,88 @@ export interface HermesMemoryWriteResponse {
   message?: string;
   error?: string;
   [key: string]: unknown;
+}
+
+export interface WikiTreeNode {
+  id: string;
+  name: string;
+  path: string;
+  type: "directory" | "page";
+  children?: WikiTreeNode[];
+  title?: string;
+  read_only?: boolean;
+  has_frontmatter?: boolean;
+}
+
+export interface WikiPageSummary {
+  path: string;
+  absolute_path: string;
+  title: string;
+  read_only: boolean;
+  has_frontmatter: boolean;
+  size_bytes: number;
+}
+
+export interface WikiTreeResponse {
+  profile: string;
+  wiki_root: string;
+  tree: WikiTreeNode;
+  pages: WikiPageSummary[];
+}
+
+export interface WikiLinkRef {
+  label: string;
+  path: string | null;
+  exists: boolean;
+}
+
+export interface WikiBacklinkRef {
+  path: string;
+  title: string;
+  link: string;
+  read_only: boolean;
+}
+
+export interface WikiPageResponse {
+  profile: string;
+  wiki_root: string;
+  path: string;
+  absolute_path: string;
+  title: string;
+  frontmatter: Record<string, unknown>;
+  body: string;
+  raw: string;
+  read_only: boolean;
+  outgoing_links: WikiLinkRef[];
+  backlinks: WikiBacklinkRef[];
+}
+
+export interface WikiBacklinksResponse {
+  profile: string;
+  wiki_root: string;
+  path: string;
+  backlinks: WikiBacklinkRef[];
+}
+
+export interface WikiLintIssue {
+  kind: string;
+  path: string;
+  message: string;
+  severity: "error" | "warning";
+  link?: string;
+  source?: string;
+}
+
+export interface WikiLintResponse {
+  profile: string;
+  wiki_root: string;
+  issues: WikiLintIssue[];
+  summary: {
+    pages: number;
+    issues: number;
+    errors: number;
+    warnings: number;
+  };
 }
 
 // ── OAuth provider types ────────────────────────────────────────────────

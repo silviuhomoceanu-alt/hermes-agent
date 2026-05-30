@@ -2713,6 +2713,46 @@ async def search_memory(q: str, profiles: str = "all", limit: int = 50):
     return {"results": MemoryWorkbench().search(q, profiles=profiles, limit=safe_limit)}
 
 
+@app.get("/api/memory/wiki/tree")
+async def get_memory_wiki_tree(profile: str = "default"):
+    from hermes_cli.wiki_memory import WikiMemory
+
+    try:
+        return WikiMemory().tree(profile)
+    except ValueError as exc:
+        raise _memory_error(exc)
+
+
+@app.get("/api/memory/wiki/page")
+async def get_memory_wiki_page(profile: str = "default", path: str = "index.md"):
+    from hermes_cli.wiki_memory import WikiMemory
+
+    try:
+        return WikiMemory().page(profile, path)
+    except ValueError as exc:
+        raise _memory_error(exc)
+
+
+@app.get("/api/memory/wiki/backlinks")
+async def get_memory_wiki_backlinks(profile: str = "default", path: str = "index.md"):
+    from hermes_cli.wiki_memory import WikiMemory
+
+    try:
+        return WikiMemory().backlinks(profile, path)
+    except ValueError as exc:
+        raise _memory_error(exc)
+
+
+@app.get("/api/memory/wiki/lint")
+async def get_memory_wiki_lint(profile: str = "default"):
+    from hermes_cli.wiki_memory import WikiMemory
+
+    try:
+        return WikiMemory().lint(profile)
+    except ValueError as exc:
+        raise _memory_error(exc)
+
+
 class AddHermesMemoryRequest(BaseModel):
     profile: str = "default"
     target: str
