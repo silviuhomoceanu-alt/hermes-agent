@@ -290,6 +290,8 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
+  getMemoryAudit: (limit = 50) =>
+    fetchJSON<MemoryAuditResponse>(`/api/memory/audit?limit=${encodeURIComponent(String(limit))}`),
   getWikiTree: (profile = "default") =>
     fetchJSON<WikiTreeResponse>(`/api/memory/wiki/tree?profile=${encodeURIComponent(profile)}`),
   getWikiPage: (profile: string, path: string) => {
@@ -1189,6 +1191,22 @@ export interface WikiLintIssue {
   source?: string;
 }
 
+
+
+export interface MemoryAuditOperation {
+  id: string;
+  timestamp: string;
+  profile: string;
+  source: "hermes" | "honcho" | "wiki" | string;
+  action: string;
+  success: boolean;
+  details: Record<string, unknown>;
+  error?: string;
+}
+
+export interface MemoryAuditResponse {
+  operations: MemoryAuditOperation[];
+}
 
 export interface WikiPageWriteRequest {
   profile: string;

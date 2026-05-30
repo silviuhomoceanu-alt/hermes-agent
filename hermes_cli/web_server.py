@@ -2773,8 +2773,11 @@ async def put_memory_wiki_page(request: WikiPageWriteRequest):
     from hermes_cli.wiki_memory import WikiMemory
 
     try:
-        return WikiMemory().save_page(request.profile, request.path, frontmatter=request.frontmatter, body=request.body, raw=request.raw)
+        result = WikiMemory().save_page(request.profile, request.path, frontmatter=request.frontmatter, body=request.body, raw=request.raw)
+        _audit_memory_workbench(request.profile, "wiki", "update", success=True, details={"path": request.path})
+        return result
     except ValueError as exc:
+        _audit_memory_workbench(request.profile, "wiki", "update", success=False, details={"path": request.path}, error=str(exc))
         raise _memory_error(exc)
 
 
@@ -2783,8 +2786,11 @@ async def post_memory_wiki_page(request: WikiPageWriteRequest):
     from hermes_cli.wiki_memory import WikiMemory
 
     try:
-        return WikiMemory().create_page(request.profile, request.path, frontmatter=request.frontmatter, body=request.body, raw=request.raw)
+        result = WikiMemory().create_page(request.profile, request.path, frontmatter=request.frontmatter, body=request.body, raw=request.raw)
+        _audit_memory_workbench(request.profile, "wiki", "create", success=True, details={"path": request.path})
+        return result
     except ValueError as exc:
+        _audit_memory_workbench(request.profile, "wiki", "create", success=False, details={"path": request.path}, error=str(exc))
         raise _memory_error(exc)
 
 
@@ -2793,8 +2799,11 @@ async def post_memory_wiki_rename(request: WikiRenameRequest):
     from hermes_cli.wiki_memory import WikiMemory
 
     try:
-        return WikiMemory().rename_page(request.profile, request.oldPath, request.newPath)
+        result = WikiMemory().rename_page(request.profile, request.oldPath, request.newPath)
+        _audit_memory_workbench(request.profile, "wiki", "rename", success=True, details={"old_path": request.oldPath, "new_path": request.newPath})
+        return result
     except ValueError as exc:
+        _audit_memory_workbench(request.profile, "wiki", "rename", success=False, details={"old_path": request.oldPath, "new_path": request.newPath}, error=str(exc))
         raise _memory_error(exc)
 
 
@@ -2886,7 +2895,9 @@ async def put_memory_honcho_peer_card(request: HonchoPeerCardRequest):
     try:
         api, record = _honcho_api_for_profile(request.profile)
         result = api.update_peer_card(request.peerId, request.card)
+        _audit_memory_workbench(record.name, "honcho", "peer_card_update", success=True, details={"peer_id": request.peerId})
     except (ValueError, RuntimeError) as exc:
+        _audit_memory_workbench(request.profile, "honcho", "peer_card_update", success=False, details={"peer_id": request.peerId}, error=str(exc))
         raise _memory_error(exc)
     return {"profile": record.name, "result": result}
 
@@ -2896,7 +2907,9 @@ async def post_memory_honcho_conclusion(request: HonchoConclusionRequest):
     try:
         api, record = _honcho_api_for_profile(request.profile)
         result = api.create_conclusion(request.peerId, request.conclusion)
+        _audit_memory_workbench(record.name, "honcho", "conclusion_create", success=True, details={"peer_id": request.peerId})
     except (ValueError, RuntimeError) as exc:
+        _audit_memory_workbench(request.profile, "honcho", "conclusion_create", success=False, details={"peer_id": request.peerId}, error=str(exc))
         raise _memory_error(exc)
     return {"profile": record.name, "result": result}
 
@@ -2908,7 +2921,9 @@ async def delete_memory_honcho_conclusion(conclusion_id: str, profile: str = "de
     try:
         api, record = _honcho_api_for_profile(profile)
         result = api.delete_conclusion(conclusion_id)
+        _audit_memory_workbench(record.name, "honcho", "conclusion_delete", success=True, details={"conclusion_id": conclusion_id})
     except (ValueError, RuntimeError) as exc:
+        _audit_memory_workbench(profile, "honcho", "conclusion_delete", success=False, details={"conclusion_id": conclusion_id}, error=str(exc))
         raise _memory_error(exc)
     return {"profile": record.name, "result": result}
 
@@ -2932,6 +2947,56 @@ def _memory_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
+def _memory_audit_path() -> Path:
+    return get_hermes_home() / "logs" / "memory-workbench.log"
+
+
+def _safe_audit_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _safe_audit_value(v) for k, v in value.items() if not any(token in str(k).lower() for token in ("secret", "token", "password", "authorization", "credential", "api_key"))}
+    if isinstance(value, list):
+        return [_safe_audit_value(v) for v in value]
+    if isinstance(value, str) and len(value) > 300:
+        return value[:300] + "…"
+    return value
+
+
+def _audit_memory_workbench(profile: str, source: str, action: str, *, success: bool, details: Optional[Dict[str, Any]] = None, error: Optional[str] = None) -> Dict[str, Any]:
+    record = {
+        "id": secrets.token_hex(8),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "profile": profile,
+        "source": source,
+        "action": action,
+        "success": success,
+        "details": _safe_audit_value(details or {}),
+    }
+    if error:
+        record["error"] = str(error)[:500]
+    path = _memory_audit_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return record
+
+
+@app.get("/api/memory/audit")
+async def get_memory_audit(limit: int = 50):
+    path = _memory_audit_path()
+    safe_limit = max(1, min(int(limit), 200))
+    if not path.exists():
+        return {"operations": []}
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-safe_limit:]
+    operations = []
+    for line in lines:
+        try:
+            operations.append(json.loads(line))
+        except Exception:
+            continue
+    operations.reverse()
+    return {"operations": operations}
+
+
 @app.get("/api/memory/hermes")
 async def get_hermes_memory(profile: str = "default"):
     from hermes_cli.hermes_hot_memory import HermesHotMemory
@@ -2949,9 +3014,12 @@ async def add_hermes_memory(request: AddHermesMemoryRequest):
     try:
         result = HermesHotMemory().add(request.profile, request.target, request.content)
     except ValueError as exc:
+        _audit_memory_workbench(request.profile, "hermes", "add", success=False, details={"target": request.target}, error=str(exc))
         raise _memory_error(exc)
     if not result.get("success", False):
+        _audit_memory_workbench(request.profile, "hermes", "add", success=False, details={"target": request.target}, error=str(result))
         raise HTTPException(status_code=400, detail=result)
+    _audit_memory_workbench(request.profile, "hermes", "add", success=True, details={"target": request.target})
     return result
 
 
@@ -2962,9 +3030,12 @@ async def update_hermes_memory(profile: str, target: str, entry_id: str, request
     try:
         result = HermesHotMemory().replace(profile, target, entry_id, request.expectedOldContent, request.content)
     except ValueError as exc:
+        _audit_memory_workbench(profile, "hermes", "update", success=False, details={"target": target, "entry_id": entry_id}, error=str(exc))
         raise _memory_error(exc)
     if not result.get("success", False):
+        _audit_memory_workbench(profile, "hermes", "update", success=False, details={"target": target, "entry_id": entry_id}, error=str(result))
         raise HTTPException(status_code=409, detail=result)
+    _audit_memory_workbench(profile, "hermes", "update", success=True, details={"target": target, "entry_id": entry_id})
     return result
 
 
@@ -2980,9 +3051,12 @@ async def delete_hermes_memory(profile: str, target: str, entry_id: str, request
             request.expectedOldContent if request is not None else None,
         )
     except ValueError as exc:
+        _audit_memory_workbench(profile, "hermes", "delete", success=False, details={"target": target, "entry_id": entry_id}, error=str(exc))
         raise _memory_error(exc)
     if not result.get("success", False):
+        _audit_memory_workbench(profile, "hermes", "delete", success=False, details={"target": target, "entry_id": entry_id}, error=str(result))
         raise HTTPException(status_code=409, detail=result)
+    _audit_memory_workbench(profile, "hermes", "delete", success=True, details={"target": target, "entry_id": entry_id})
     return result
 
 

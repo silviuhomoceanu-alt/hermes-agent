@@ -4,6 +4,8 @@ import { Badge } from "@nous-research/ui/ui/components/badge";
 import type { MemoryEdge, MemoryNode, MemoryProfileInfo } from "@/lib/api";
 import { metadataString, SOURCE_COLORS, SOURCE_LABELS } from "./constants";
 import { HermesMemoryEditor } from "./HermesMemoryEditor";
+import { WikiPageEditor } from "./WikiPageEditor";
+import { HonchoInspector } from "./HonchoInspector";
 
 interface MemoryInspectorProps {
   node: MemoryNode | null;
@@ -39,6 +41,8 @@ export function MemoryInspector({ node, edges, nodes, profiles, onFocus, onMemor
   const path = metadataString(node.metadata?.path || node.metadata?.relative_path || "");
   const profile = metadataString(node.metadata?.profile || "");
   const isHermesEntry = node.kind === "hermes_user_entry" || node.kind === "hermes_memory_entry";
+  const isWikiPage = node.kind === "wiki_page" || node.kind === "wiki_raw_source";
+  const isHonchoNode = node.source === "honcho";
 
   return (
     <aside className="overflow-hidden rounded border border-current/10 bg-background/45">
@@ -58,6 +62,8 @@ export function MemoryInspector({ node, edges, nodes, profiles, onFocus, onMemor
         {path && <InfoRow icon={<FileText className="h-3.5 w-3.5" />} label="Path" value={path} mono />}
 
         {isHermesEntry && <HermesMemoryEditor node={node} profiles={profiles} onChanged={onMemoryChanged} />}
+        {isWikiPage && <WikiPageEditor node={node} onChanged={onMemoryChanged} />}
+        {isHonchoNode && <HonchoInspector node={node} onChanged={onMemoryChanged} />}
 
         {content && (
           <section className="mt-4">

@@ -2,6 +2,7 @@ import { GitBranch } from "lucide-react";
 import type { MemoryProfileInfo } from "@/lib/api";
 import { SOURCE_COLORS, SOURCE_LABELS } from "./constants";
 import { MemoryGraphSettings } from "./MemoryGraphSettings";
+import { MemoryAuditPanel } from "./MemoryAuditPanel";
 import type { GraphDensitySettings, GraphMode, SourceFilter } from "./types";
 
 interface MemorySourceSidebarProps {
@@ -71,6 +72,8 @@ export function MemorySourceSidebar({
         <LegendItem color={SOURCE_COLORS.wiki} label="LLM Wiki" />
         <LegendItem color={SOURCE_COLORS.derived} label="Derived mentions" />
       </div>
+
+      <MemoryAuditPanel />
     </aside>
   );
 }
