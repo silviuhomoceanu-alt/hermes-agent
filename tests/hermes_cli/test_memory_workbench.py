@@ -183,3 +183,92 @@ def test_memory_workbench_link_endpoints(tmp_path, monkeypatch):
         web_server.app.state.auth_required = prev_required
         web_server.app.state.bound_host = prev_host
         web_server.app.state.bound_port = prev_port
+
+
+
+def test_memory_workbench_curation_endpoints_cover_v1_flows(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from hermes_cli import memory_sources, web_server
+
+    root = tmp_path / ".hermes"
+    wiki = tmp_path / "wiki"
+    _write(root / "memories" / "USER.md", "Existing user fact.")
+    _write(root / "memories" / "MEMORY.md", "Verbose memory entry that should move to the wiki with more detail.")
+    _write(root / ".env", f"WIKI_PATH={wiki}\n")
+    _write(wiki / "index.md", "# Index\n")
+    _write(wiki / "concepts" / "stable.md", "---\ntitle: Stable\n---\n# Stable\n\nStable wiki fact.\n")
+    monkeypatch.setattr(memory_sources, "get_default_hermes_root", lambda: root)
+
+    prev_required = getattr(web_server.app.state, "auth_required", None)
+    prev_host = getattr(web_server.app.state, "bound_host", None)
+    prev_port = getattr(web_server.app.state, "bound_port", None)
+    web_server.app.state.auth_required = False
+    web_server.app.state.bound_host = "127.0.0.1"
+    web_server.app.state.bound_port = 8080
+    try:
+        client = TestClient(web_server.app, base_url="http://127.0.0.1:8080")
+        headers = {web_server._SESSION_HEADER_NAME: web_server._SESSION_TOKEN}
+
+        # Honcho conclusion -> Hermes entry, draft first then confirmed write.
+        draft = client.post("/api/memory/promote", json={
+            "profile": "default",
+            "sourceNodeId": "honcho:default:conclusion:c1",
+            "sourceText": "User prefers assertive summaries.",
+            "target": "hermes",
+            "targetMemory": "user",
+        }, headers=headers)
+        assert draft.status_code == 200
+        assert draft.json()["applied"] is False
+        assert draft.json()["draft"]["content"] == "User prefers assertive summaries."
+        applied = client.post("/api/memory/promote", json={
+            "profile": "default",
+            "sourceNodeId": "honcho:default:conclusion:c1",
+            "sourceText": "User prefers assertive summaries.",
+            "target": "hermes",
+            "targetMemory": "user",
+            "confirm": True,
+        }, headers=headers)
+        assert applied.status_code == 200
+        assert applied.json()["applied"] is True
+        assert "User prefers assertive summaries." in (root / "memories" / "USER.md").read_text(encoding="utf-8")
+
+        # Honcho conclusion -> Wiki page.
+        wiki_promote = client.post("/api/memory/promote", json={
+            "profile": "default",
+            "sourceText": "A durable concept from Honcho.",
+            "target": "wiki",
+            "targetPath": "concepts/from-honcho.md",
+            "title": "From Honcho",
+            "confirm": True,
+        }, headers=headers)
+        assert wiki_promote.status_code == 200
+        assert (wiki / "concepts" / "from-honcho.md").is_file()
+
+        # Hermes verbose entry -> Wiki page + compact pointer.
+        demote = client.post("/api/memory/demote", json={
+            "profile": "default",
+            "sourceNodeId": "hermes:default:memory:0",
+            "target": "wiki",
+            "targetPath": "concepts/demoted.md",
+            "title": "Demoted",
+            "pointerContent": "Moved to wiki: [[concepts/demoted]]",
+            "confirm": True,
+        }, headers=headers)
+        assert demote.status_code == 200
+        assert (wiki / "concepts" / "demoted.md").is_file()
+        assert "Moved to wiki: [[concepts/demoted]]" in (root / "memories" / "MEMORY.md").read_text(encoding="utf-8")
+
+        # Wiki stable fact -> Hermes entry.
+        wiki_to_hermes = client.post("/api/memory/promote", json={
+            "profile": "default",
+            "sourcePath": "concepts/stable.md",
+            "target": "hermes",
+            "targetMemory": "memory",
+            "confirm": True,
+        }, headers=headers)
+        assert wiki_to_hermes.status_code == 200
+        assert "Stable wiki fact." in (root / "memories" / "MEMORY.md").read_text(encoding="utf-8")
+    finally:
+        web_server.app.state.auth_required = prev_required
+        web_server.app.state.bound_host = prev_host
+        web_server.app.state.bound_port = prev_port

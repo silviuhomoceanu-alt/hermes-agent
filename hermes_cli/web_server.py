@@ -2682,6 +2682,20 @@ class MemoryLinkRequest(BaseModel):
     linkId: Optional[str] = None
 
 
+class MemoryCurationRequest(BaseModel):
+    profile: str = "default"
+    sourceNodeId: Optional[str] = None
+    sourceText: Optional[str] = None
+    sourcePath: Optional[str] = None
+    target: str
+    targetMemory: str = "memory"
+    targetPath: Optional[str] = None
+    title: Optional[str] = None
+    content: Optional[str] = None
+    pointerContent: Optional[str] = None
+    confirm: bool = False
+
+
 @app.get("/api/memory/profiles")
 async def get_memory_profiles():
     from hermes_cli.memory_workbench import MemoryWorkbench
@@ -2768,6 +2782,125 @@ async def post_memory_unlink(request: MemoryLinkRequest):
         return result
     except ValueError as exc:
         _audit_memory_workbench(request.profile, "manual", "unlink", success=False, details={"link_id": request.linkId, "from": request.fromNodeId, "to": request.toNodeId, "kind": request.kind}, error=str(exc))
+        raise _memory_error(exc)
+
+
+
+def _curation_source_text(request: MemoryCurationRequest) -> tuple[str, dict[str, Any]]:
+    if request.sourceText and request.sourceText.strip():
+        return request.sourceText.strip(), {"source": "request"}
+    node_id = (request.sourceNodeId or "").strip()
+    if node_id.startswith("hermes:"):
+        parts = node_id.split(":")
+        if len(parts) != 4:
+            raise ValueError("Hermes sourceNodeId must be hermes:<profile>:<user|memory>:<index>")
+        _, profile, target, entry_id = parts
+        from hermes_cli.hermes_hot_memory import HermesHotMemory
+        data = HermesHotMemory().read(profile)
+        for store in data.get("stores", []):
+            if store.get("target") == target:
+                for entry in store.get("entries", []):
+                    if str(entry.get("id")) == entry_id:
+                        return str(entry.get("content") or ""), {"source": "hermes", "profile": profile, "target": target, "entry_id": entry_id}
+        raise ValueError("Hermes source entry not found")
+    if node_id.startswith("wiki:") or request.sourcePath:
+        path = request.sourcePath
+        if not path and node_id.startswith("wiki:"):
+            try:
+                path = node_id.rsplit(":", 1)[1]
+            except Exception as exc:
+                raise ValueError("Wiki sourceNodeId must be wiki:<root>:<path>") from exc
+        from hermes_cli.wiki_memory import WikiMemory
+        page = WikiMemory().page(request.profile, path or "")
+        return str(page.get("body") or page.get("raw") or ""), {"source": "wiki", "profile": page.get("profile"), "path": page.get("path")}
+    if node_id.startswith("honcho:"):
+        raise ValueError("Honcho source requires sourceText in v1 when no live graph node payload is supplied")
+    raise ValueError("sourceText, sourcePath, or sourceNodeId is required")
+
+
+def _curation_title(request: MemoryCurationRequest, fallback: str) -> str:
+    title = (request.title or "").strip()
+    if title:
+        return title[:120]
+    first = " ".join((fallback or "").strip().split())[:80]
+    return first or "Curated Memory"
+
+
+def _curation_path(request: MemoryCurationRequest, title: str) -> str:
+    explicit = (request.targetPath or "").strip()
+    if explicit:
+        return explicit
+    slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in title).strip("-") or "curated-memory"
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return f"concepts/{slug[:80]}.md"
+
+
+def _memory_curation_response(request: MemoryCurationRequest, *, direction: str) -> dict[str, Any]:
+    source_text, source_meta = _curation_source_text(request)
+    target = (request.target or "").strip().lower()
+    draft_text = (request.content if request.content is not None else source_text).strip()
+    if not draft_text:
+        raise ValueError("curation draft content is empty")
+    response: dict[str, Any] = {
+        "profile": request.profile,
+        "direction": direction,
+        "target": target,
+        "applied": False,
+        "requiresConfirmation": not request.confirm,
+        "source": source_meta,
+    }
+    if target == "hermes":
+        memory_target = (request.targetMemory or "memory").strip().lower()
+        response["draft"] = {"targetMemory": memory_target, "content": draft_text}
+        if request.confirm:
+            from hermes_cli.hermes_hot_memory import HermesHotMemory
+            result = HermesHotMemory().add(request.profile, memory_target, draft_text)
+            if not result.get("success", False):
+                raise ValueError(str(result))
+            response.update({"applied": True, "result": result})
+        return response
+    if target == "wiki":
+        title = _curation_title(request, draft_text)
+        path = _curation_path(request, title)
+        body = draft_text if draft_text.startswith("#") else f"# {title}\n\n{draft_text}\n"
+        response["draft"] = {"path": path, "frontmatter": {"title": title, "tags": ["curated/memory-workbench"]}, "body": body}
+        if request.confirm:
+            from hermes_cli.wiki_memory import WikiMemory
+            result = WikiMemory().create_page(request.profile, path, frontmatter=response["draft"]["frontmatter"], body=body)
+            response.update({"applied": True, "result": result})
+            # Hermes verbose-entry demotion: replace original hot-memory entry with a compact pointer.
+            node_id = (request.sourceNodeId or "").strip()
+            if direction == "demote" and node_id.startswith("hermes:"):
+                parts = node_id.split(":")
+                if len(parts) == 4:
+                    _, profile, memory_target, entry_id = parts
+                    pointer = (request.pointerContent or f"Moved to wiki: [[{path.removesuffix('.md')}]]").strip()
+                    from hermes_cli.hermes_hot_memory import HermesHotMemory
+                    response["pointer"] = HermesHotMemory().replace(profile, memory_target, entry_id, source_text, pointer)
+        return response
+    raise ValueError("target must be 'hermes' or 'wiki'")
+
+
+@app.post("/api/memory/promote")
+async def post_memory_promote(request: MemoryCurationRequest):
+    try:
+        result = _memory_curation_response(request, direction="promote")
+        _audit_memory_workbench(request.profile, "curation", "promote", success=True, details={"target": request.target, "applied": result.get("applied"), "source": request.sourceNodeId or request.sourcePath})
+        return result
+    except ValueError as exc:
+        _audit_memory_workbench(request.profile, "curation", "promote", success=False, details={"target": request.target, "source": request.sourceNodeId or request.sourcePath}, error=str(exc))
+        raise _memory_error(exc)
+
+
+@app.post("/api/memory/demote")
+async def post_memory_demote(request: MemoryCurationRequest):
+    try:
+        result = _memory_curation_response(request, direction="demote")
+        _audit_memory_workbench(request.profile, "curation", "demote", success=True, details={"target": request.target, "applied": result.get("applied"), "source": request.sourceNodeId or request.sourcePath})
+        return result
+    except ValueError as exc:
+        _audit_memory_workbench(request.profile, "curation", "demote", success=False, details={"target": request.target, "source": request.sourceNodeId or request.sourcePath}, error=str(exc))
         raise _memory_error(exc)
 
 

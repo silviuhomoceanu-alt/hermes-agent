@@ -304,6 +304,18 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  promoteMemory: (body: MemoryCurationRequest) =>
+    fetchJSON<MemoryCurationResponse>("/api/memory/promote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  demoteMemory: (body: MemoryCurationRequest) =>
+    fetchJSON<MemoryCurationResponse>("/api/memory/demote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getWikiTree: (profile = "default") =>
     fetchJSON<WikiTreeResponse>(`/api/memory/wiki/tree?profile=${encodeURIComponent(profile)}`),
   getWikiPage: (profile: string, path: string) => {
@@ -1100,6 +1112,33 @@ export interface MemoryLinkRequest {
   kind?: "manual_link" | "curated_link";
   label?: string;
   linkId?: string;
+}
+
+
+export interface MemoryCurationRequest {
+  profile?: string;
+  sourceNodeId?: string;
+  sourceText?: string;
+  sourcePath?: string;
+  target: "hermes" | "wiki";
+  targetMemory?: HermesMemoryTarget;
+  targetPath?: string;
+  title?: string;
+  content?: string;
+  pointerContent?: string;
+  confirm?: boolean;
+}
+
+export interface MemoryCurationResponse {
+  profile: string;
+  direction: "promote" | "demote";
+  target: "hermes" | "wiki";
+  applied: boolean;
+  requiresConfirmation: boolean;
+  source: Record<string, unknown>;
+  draft: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  pointer?: Record<string, unknown>;
 }
 
 export interface MemoryLinkResponse {
