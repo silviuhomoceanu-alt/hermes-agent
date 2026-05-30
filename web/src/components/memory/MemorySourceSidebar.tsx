@@ -1,5 +1,5 @@
 import { GitBranch } from "lucide-react";
-import type { MemoryEdge, MemoryNode, MemoryProfileInfo } from "@/lib/api";
+import type { MemoryEdge, MemoryGraphView, MemoryNode, MemoryProfileInfo } from "@/lib/api";
 import { SOURCE_COLORS, SOURCE_LABELS } from "./constants";
 import { MemoryGraphSettings } from "./MemoryGraphSettings";
 import { MemoryAuditPanel } from "./MemoryAuditPanel";
@@ -12,6 +12,8 @@ interface MemorySourceSidebarProps {
   onSelectedProfileChange: (profile: string) => void;
   sourceFilter: SourceFilter;
   onSourceFilterChange: (source: SourceFilter) => void;
+  graphView: MemoryGraphView;
+  onGraphViewChange: (view: MemoryGraphView) => void;
   mode: GraphMode;
   onModeChange: (mode: GraphMode) => void;
   densitySettings: GraphDensitySettings;
@@ -27,6 +29,8 @@ export function MemorySourceSidebar({
   onSelectedProfileChange,
   sourceFilter,
   onSourceFilterChange,
+  graphView,
+  onGraphViewChange,
   mode,
   onModeChange,
   densitySettings,
@@ -51,6 +55,23 @@ export function MemorySourceSidebar({
           <option value={profile.name} key={profile.name}>{profile.name}</option>
         ))}
       </select>
+
+      <label className="mb-1 block text-xs uppercase tracking-widest text-foreground/40">View</label>
+      <div className="mb-4 grid grid-cols-2 rounded border border-current/15 bg-background/60 p-1 text-xs">
+        {([
+          ["stored_content", "Stored Content"],
+          ["storage", "Storage Structure"],
+        ] as const).map(([view, label]) => (
+          <button
+            key={view}
+            type="button"
+            onClick={() => onGraphViewChange(view)}
+            className={`rounded px-2 py-1.5 text-center transition-colors ${graphView === view ? "bg-midground text-background" : "text-foreground/55 hover:bg-current/5 hover:text-foreground"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
       <label className="mb-1 block text-xs uppercase tracking-widest text-foreground/40">Source</label>
       <div className="mb-4 grid gap-1">

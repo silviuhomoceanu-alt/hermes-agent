@@ -47,7 +47,12 @@ class MemoryWorkbench:
         include_messages: bool = False,
         include_raw_sources: bool = True,
         include_derived_edges: bool = True,
+        view: str = "storage",
     ) -> dict[str, Any]:
+        view = (view or "storage").strip().lower()
+        if view not in {"storage", "stored_content"}:
+            raise ValueError("memory graph view must be 'storage' or 'stored_content'")
+
         selected = self.sources.select_profiles(profiles)
         nodes: dict[str, dict[str, Any]] = {}
         edges: dict[str, dict[str, Any]] = {}
@@ -96,7 +101,8 @@ class MemoryWorkbench:
 
         node_list = list(nodes.values())
         edge_list = list(edges.values())
-        return {
+        result = {
+            "view": view,
             "nodes": node_list,
             "edges": edge_list,
             "summary": {
@@ -109,6 +115,86 @@ class MemoryWorkbench:
             },
             "warnings": warnings,
         }
+        if view == "stored_content":
+            return self._stored_content_view(result)
+        return result
+
+    def _stored_content_view(self, graph: dict[str, Any]) -> dict[str, Any]:
+        original_nodes = list(graph.get("nodes", []))
+        original_edges = list(graph.get("edges", []))
+        visible_ids = {
+            str(node.get("id"))
+            for node in original_nodes
+            if self._is_stored_content_node(node)
+        }
+        nodes = [self._with_stored_content_provenance(node) for node in original_nodes if node.get("id") in visible_ids]
+        edges = [
+            edge for edge in original_edges
+            if edge.get("from") in visible_ids
+            and edge.get("to") in visible_ids
+            and edge.get("kind") != "contains"
+        ]
+        summary = dict(graph.get("summary", {}))
+        summary["storage_nodes"] = len(original_nodes)
+        summary["storage_edges"] = len(original_edges)
+        summary["nodes"] = len(nodes)
+        summary["edges"] = len(edges)
+        return {**graph, "nodes": nodes, "edges": edges, "summary": summary}
+
+    @staticmethod
+    def _is_stored_content_node(node: dict[str, Any]) -> bool:
+        return node.get("kind") in {
+            "hermes_user_entry",
+            "hermes_memory_entry",
+            "wiki_page",
+            "wiki_raw_source",
+            "honcho_peer",
+            "honcho_conclusion",
+        }
+
+    def _with_stored_content_provenance(self, node: dict[str, Any]) -> dict[str, Any]:
+        metadata = dict(node.get("metadata") or {})
+        metadata["provenance"] = self._stored_content_provenance(node, metadata)
+        return {**node, "metadata": metadata}
+
+    @staticmethod
+    def _stored_content_provenance(node: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+        source = str(node.get("source") or "")
+        kind = str(node.get("kind") or "")
+        if source == "hermes":
+            target = str(metadata.get("target") or "")
+            store = "USER.md" if target == "user" else "MEMORY.md" if target == "memory" else None
+            provenance: dict[str, Any] = {
+                "source": "hermes",
+                "profile": metadata.get("profile"),
+                "target": metadata.get("target"),
+                "index": metadata.get("index"),
+                "path": metadata.get("path"),
+            }
+            if store:
+                provenance["store"] = store
+            return provenance
+        if source == "wiki":
+            return {
+                "source": "wiki",
+                "kind": "raw_source" if kind == "wiki_raw_source" else "page",
+                "path": metadata.get("path"),
+                "relative_path": metadata.get("relative_path"),
+            }
+        if source == "honcho":
+            raw_value = metadata.get("raw")
+            raw: dict[str, Any] = raw_value if isinstance(raw_value, dict) else {}
+            provenance = {
+                "source": "honcho",
+                "profile": metadata.get("profile"),
+                "kind": "conclusion" if kind == "honcho_conclusion" else "peer",
+            }
+            if kind == "honcho_conclusion":
+                provenance["id"] = raw.get("id") or raw.get("uuid") or str(node.get("id", "")).split(":")[-1]
+            else:
+                provenance["peer_id"] = metadata.get("peer_id") or raw.get("id") or raw.get("peer_id") or node.get("label")
+            return provenance
+        return {"source": source, "kind": kind}
 
     def search(self, query: str, *, profiles: str | Iterable[str] = "all", limit: int = 50) -> list[dict[str, Any]]:
         q = (query or "").strip().lower()

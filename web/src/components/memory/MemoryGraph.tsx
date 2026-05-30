@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
 import { Database } from "lucide-react";
+import type { MemoryGraphView } from "@/lib/api";
 import { SOURCE_COLORS } from "./constants";
 import type { GraphLink, GraphNode, NodeLabelDensity, VisibleMemoryGraph } from "./types";
 
 interface MemoryGraphProps {
   graphData: VisibleMemoryGraph;
+  graphView: MemoryGraphView;
   loading: boolean;
   selectedNodeId: string | null;
   focusedNodeRevision: number;
@@ -19,7 +21,7 @@ interface MemoryGraphProps {
   children?: React.ReactNode;
 }
 
-export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRevision, hoveredNodeId, nodeLabelDensity, showEdgeLabels, totalNodeCount, totalEdgeCount, onNodeSelect, onNodeHover, children }: MemoryGraphProps) {
+export function MemoryGraph({ graphData, graphView, loading, selectedNodeId, focusedNodeRevision, hoveredNodeId, nodeLabelDensity, showEdgeLabels, totalNodeCount, totalEdgeCount, onNodeSelect, onNodeHover, children }: MemoryGraphProps) {
   const graphRef = useRef<ForceGraphMethods<GraphNode, GraphLink> | undefined>(undefined);
   const graphHostRef = useRef<HTMLElement | null>(null);
   const [graphSize, setGraphSize] = useState({ width: 0, height: 0 });
@@ -41,10 +43,11 @@ export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRev
   useEffect(() => {
     const fg = graphRef.current;
     if (!fg) return;
-    fg.d3Force("charge")?.strength(-320);
-    fg.d3Force("link")?.distance(92);
+    const isStoredContentView = graphView === "stored_content";
+    fg.d3Force("charge")?.strength(isStoredContentView ? -430 : -320);
+    fg.d3Force("link")?.distance(isStoredContentView ? 124 : 92);
     fg.d3ReheatSimulation();
-  }, [graphData.nodes.length, graphData.links.length]);
+  }, [graphData.nodes.length, graphData.links.length, graphView]);
 
   useEffect(() => {
     if (!selectedNodeId) return;
@@ -84,7 +87,7 @@ export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRev
           backgroundColor="rgba(0,0,0,0)"
           nodeRelSize={6}
           nodeVal={(node) => node.val ?? 4}
-          nodeLabel={(node) => `${node.label}\n${node.kind}`}
+          nodeLabel={(node) => nodeTooltip(node, graphView)}
           nodeColor={(node) => node.color ?? SOURCE_COLORS[node.source] ?? "#94a3b8"}
           linkColor={(link) => link.color ?? "rgba(148,163,184,0.22)"}
           linkWidth={(link) => (link.kind === "wikilink" || link.kind === "contains" ? 1.1 : 0.6)}
@@ -121,7 +124,14 @@ export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRev
             const isSelected = node.id === selectedNodeId;
             const isHovered = node.id === hoveredNodeId;
             const isAnchor = node.kind === "profile" || node.kind === "wiki_root" || node.kind === "honcho_workspace";
-            const shouldLabel = isSelected || isHovered || (nodeLabelDensity === "balanced" && (isAnchor || globalScale > 2.1)) || (nodeLabelDensity === "minimal" && (isAnchor || globalScale > 3.2)) || (nodeLabelDensity === "dense" && (isAnchor || globalScale > 1.15 || (node.visibleDegree ?? 0) >= 3));
+            const isStoredContentView = graphView === "stored_content";
+            const shouldLabel = isSelected || isHovered
+              || (isStoredContentView && nodeLabelDensity === "balanced" && (globalScale > 1.45 || (node.visibleDegree ?? 0) >= 1))
+              || (isStoredContentView && nodeLabelDensity === "minimal" && globalScale > 2.45)
+              || (isStoredContentView && nodeLabelDensity === "dense" && (globalScale > 0.95 || (node.visibleDegree ?? 0) >= 1))
+              || (!isStoredContentView && nodeLabelDensity === "balanced" && (isAnchor || globalScale > 2.1))
+              || (!isStoredContentView && nodeLabelDensity === "minimal" && (isAnchor || globalScale > 3.2))
+              || (!isStoredContentView && nodeLabelDensity === "dense" && (isAnchor || globalScale > 1.15 || (node.visibleDegree ?? 0) >= 3));
             const x = node.x ?? 0;
             const y = node.y ?? 0;
 
@@ -135,7 +145,7 @@ export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRev
 
             if (!shouldLabel) return;
 
-            const label = node.label.length > 42 ? `${node.label.slice(0, 39)}…` : node.label;
+            const label = readableNodeLabel(node, graphView, isSelected || isHovered ? 72 : 54);
             const fontSize = isSelected || isHovered ? Math.max(11, 15 / globalScale) : Math.max(9, 12 / globalScale);
             ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`;
             ctx.textAlign = "center";
@@ -176,7 +186,8 @@ export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRev
                 className={`flex min-w-0 items-center gap-1.5 rounded px-2 py-1.5 text-left text-xs hover:bg-current/5 ${selectedNodeId === node.id ? "bg-midground/15 text-midground" : "text-foreground/75"}`}
               >
                 <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: node.color ?? SOURCE_COLORS[node.source] ?? "#94a3b8" }} />
-                <span className="truncate">{node.label}</span>
+                <span className="min-w-0 flex-1 truncate">{readableNodeLabel(node, graphView, 72)}</span>
+                {graphView === "stored_content" && <span className="shrink-0 rounded bg-current/10 px-1.5 py-0.5 font-mono text-[0.56rem] uppercase text-foreground/35">{shortKind(node.kind)}</span>}
               </button>
             ))}
           </div>
@@ -184,4 +195,37 @@ export function MemoryGraph({ graphData, loading, selectedNodeId, focusedNodeRev
       )}
     </main>
   );
+}
+
+function readableNodeLabel(node: GraphNode, graphView: MemoryGraphView, maxLength: number): string {
+  const rawContent = typeof node.metadata?.content === "string" ? node.metadata.content : "";
+  const base = graphView === "stored_content" && rawContent.trim().length > 0
+    ? rawContent
+    : node.label || node.summary || node.id;
+  const normalized = base
+    .replace(/^#+\s*/gm, "")
+    .replace(/[`*_>\[\]()]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (normalized.length <= maxLength) return normalized || node.label || node.id;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function nodeTooltip(node: GraphNode, graphView: MemoryGraphView): string {
+  const lines = [readableNodeLabel(node, graphView, 160), node.kind];
+  const source = typeof node.metadata?.provenance === "object" && node.metadata.provenance && !Array.isArray(node.metadata.provenance)
+    ? (node.metadata.provenance as Record<string, unknown>).source
+    : node.source;
+  if (graphView === "stored_content") lines.push(`stored in ${String(source)}`);
+  return lines.filter(Boolean).join("\n");
+}
+
+function shortKind(kind: string): string {
+  return kind
+    .replace(/^hermes_/, "")
+    .replace(/^wiki_/, "")
+    .replace(/^honcho_/, "")
+    .replace(/_entry$/, "")
+    .replace(/_page$/, "")
+    .replace(/_/g, " ");
 }

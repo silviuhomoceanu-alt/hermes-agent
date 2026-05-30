@@ -2716,6 +2716,7 @@ async def get_memory_graph(
     includeMessages: bool = False,
     includeRawSources: bool = True,
     includeDerivedEdges: bool = True,
+    view: str = "storage",
 ):
     from hermes_cli.memory_workbench import MemoryWorkbench
 
@@ -2724,6 +2725,7 @@ async def get_memory_graph(
         include_messages=includeMessages,
         include_raw_sources=includeRawSources,
         include_derived_edges=includeDerivedEdges,
+        view=view,
     )
 
 

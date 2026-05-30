@@ -31,6 +31,7 @@ def test_memory_workbench_builds_unified_graph_from_profiles_and_wiki(tmp_path):
 
     graph = MemoryWorkbench(root=root).build_graph(include_messages=False, include_raw_sources=True)
 
+    assert graph["view"] == "storage"
     node_ids = {node["id"] for node in graph["nodes"]}
     edge_kinds = {edge["kind"] for edge in graph["edges"]}
 
@@ -106,6 +107,101 @@ def test_memory_source_registry_reuses_profile_resolution_helpers(tmp_path):
     assert profiles[0].wiki_path == wiki
     assert profiles[1].wiki_path == wiki / "research"
     assert [profile.name for profile in registry.select_profiles("research")] == ["research"]
+
+
+
+def test_memory_workbench_rejects_unknown_graph_view(tmp_path):
+    workbench = MemoryWorkbench(root=tmp_path / ".hermes")
+
+    try:
+        workbench.build_graph(view="interpreted_content")
+    except ValueError as exc:
+        assert "storage" in str(exc)
+        assert "stored_content" in str(exc)
+    else:
+        raise AssertionError("expected invalid graph view to raise ValueError")
+
+
+def test_memory_workbench_stored_content_view_hides_structure_and_preserves_exact_records(tmp_path, monkeypatch):
+    root = tmp_path / ".hermes"
+    wiki = tmp_path / "wiki"
+    exact_user = "Exact stored USER.md fact. Do not rewrite."
+    exact_memory = "Exact stored MEMORY.md fact; punctuation stays!"
+    exact_wiki_body = "# Exact Page\n\nThis is the exact stored wiki body."
+    exact_raw_body = "# Raw Source\n\nExact raw source body."
+    exact_conclusion = "Exact Honcho conclusion text."
+
+    _write(root / "memories" / "USER.md", exact_user)
+    _write(root / "memories" / "MEMORY.md", exact_memory)
+    _write(root / ".env", f"WIKI_PATH={wiki}\n")
+    _write(root / "honcho.json", '{"baseUrl":"http://honcho.local","workspace":"hermes","peerName":"agent007"}')
+    _write(wiki / "index.md", "# Index\n\n- [[concepts/exact-page]]\n")
+    _write(wiki / "concepts" / "exact-page.md", f"---\ntitle: Exact Page\n---\n{exact_wiki_body}\n[[missing-target]]\n")
+    _write(wiki / "raw" / "source.md", exact_raw_body)
+
+    def fake_post_json(_self, path, payload):
+        if path.endswith("/peers/list"):
+            return {"items": [{"id": "agent007", "card": "Exact peer card"}]}
+        if path.endswith("/conclusions/list"):
+            return {"items": [{"id": "c1", "content": exact_conclusion}]}
+        return {"items": []}
+
+    monkeypatch.setattr(HonchoMemoryAPI, "_post_json", fake_post_json)
+
+    graph = MemoryWorkbench(root=root).build_graph(view="stored_content", include_raw_sources=True, include_derived_edges=False)
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    node_kinds = {node["kind"] for node in graph["nodes"]}
+    labels = {node["label"] for node in graph["nodes"]}
+
+    assert graph["view"] == "stored_content"
+    assert "profile:default" not in nodes
+    assert "hermes:default:user" not in nodes
+    assert "hermes:default:memory" not in nodes
+    assert f"wiki:{wiki.resolve()}:root" not in nodes
+    assert "honcho:default:workspace:hermes" not in nodes
+    assert "USER.md" not in labels
+    assert "MEMORY.md" not in labels
+    assert "wiki_missing" not in node_kinds
+    assert "wiki_folder" not in node_kinds
+
+    assert nodes["hermes:default:user:0"]["metadata"]["content"] == exact_user
+    assert nodes["hermes:default:user:0"]["summary"] == exact_user
+    assert nodes["hermes:default:user:0"]["editable"] is True
+    assert nodes["hermes:default:memory:0"]["metadata"]["content"] == exact_memory
+    assert nodes[f"wiki:{wiki.resolve()}:concepts/exact-page.md"]["metadata"]["content"] == f"{exact_wiki_body}\n[[missing-target]]\n"
+    assert nodes[f"wiki:{wiki.resolve()}:raw/source.md"]["metadata"]["content"] == exact_raw_body
+    assert nodes["honcho:default:conclusion:c1"]["metadata"]["content"] == exact_conclusion
+    assert nodes["honcho:default:peer:agent007"]["editable"] is True
+
+    user_provenance = nodes["hermes:default:user:0"]["metadata"]["provenance"]
+    assert user_provenance == {
+        "source": "hermes",
+        "profile": "default",
+        "store": "USER.md",
+        "target": "user",
+        "index": 0,
+        "path": str(root / "memories" / "USER.md"),
+    }
+    wiki_provenance = nodes[f"wiki:{wiki.resolve()}:concepts/exact-page.md"]["metadata"]["provenance"]
+    assert wiki_provenance == {
+        "source": "wiki",
+        "kind": "page",
+        "path": str(wiki / "concepts" / "exact-page.md"),
+        "relative_path": "concepts/exact-page.md",
+    }
+    raw_provenance = nodes[f"wiki:{wiki.resolve()}:raw/source.md"]["metadata"]["provenance"]
+    assert raw_provenance["kind"] == "raw_source"
+    assert raw_provenance["relative_path"] == "raw/source.md"
+    honcho_provenance = nodes["honcho:default:conclusion:c1"]["metadata"]["provenance"]
+    assert honcho_provenance == {
+        "source": "honcho",
+        "profile": "default",
+        "kind": "conclusion",
+        "id": "c1",
+    }
+    assert all(edge["kind"] != "contains" for edge in graph["edges"])
+    assert graph["summary"]["storage_nodes"] > graph["summary"]["nodes"]
+    assert graph["summary"]["storage_edges"] > graph["summary"]["edges"]
 
 
 

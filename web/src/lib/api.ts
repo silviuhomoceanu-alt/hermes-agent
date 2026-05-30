@@ -249,12 +249,13 @@ export const api = {
   getReports: () => fetchJSON<ReportsResponse>("/api/reports"),
   getMemoryProfiles: () => fetchJSON<MemoryProfilesResponse>("/api/memory/profiles"),
   getMemoryOverview: () => fetchJSON<MemoryOverviewResponse>("/api/memory/overview"),
-  getMemoryGraph: (params: { profiles?: string; includeMessages?: boolean; includeRawSources?: boolean; includeDerivedEdges?: boolean } = {}) => {
+  getMemoryGraph: (params: { profiles?: string; includeMessages?: boolean; includeRawSources?: boolean; includeDerivedEdges?: boolean; view?: MemoryGraphView } = {}) => {
     const qs = new URLSearchParams();
     if (params.profiles) qs.set("profiles", params.profiles);
     if (params.includeMessages !== undefined) qs.set("includeMessages", String(params.includeMessages));
     if (params.includeRawSources !== undefined) qs.set("includeRawSources", String(params.includeRawSources));
     if (params.includeDerivedEdges !== undefined) qs.set("includeDerivedEdges", String(params.includeDerivedEdges));
+    if (params.view) qs.set("view", params.view);
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return fetchJSON<MemoryGraphResponse>(`/api/memory/graph${suffix}`);
   },
@@ -1036,6 +1037,8 @@ export interface MemoryProfileInfo {
   has_honcho: boolean;
 }
 
+export type MemoryGraphView = "stored_content" | "storage";
+
 export interface MemoryNode {
   id: string;
   source: "hermes" | "honcho" | "wiki" | "derived" | "manual";
@@ -1058,12 +1061,15 @@ export interface MemoryGraphSummary {
   profiles: number;
   nodes: number;
   edges: number;
+  storage_nodes?: number;
+  storage_edges?: number;
   hermes_entries: number;
   wiki_pages: number;
   honcho_nodes: number;
 }
 
 export interface MemoryGraphResponse {
+  view: MemoryGraphView;
   nodes: MemoryNode[];
   edges: MemoryEdge[];
   summary: MemoryGraphSummary;

@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from "react";
 import { BrainCircuit, Database, FileText, Users } from "lucide-react";
 import { Badge } from "@nous-research/ui/ui/components/badge";
-import type { MemoryEdge, MemoryNode, MemoryProfileInfo } from "@/lib/api";
+import type { MemoryEdge, MemoryGraphView, MemoryNode, MemoryProfileInfo } from "@/lib/api";
 import { metadataString, SOURCE_COLORS, SOURCE_LABELS } from "./constants";
 import { HermesMemoryEditor } from "./HermesMemoryEditor";
 import { WikiPageEditor } from "./WikiPageEditor";
@@ -12,11 +12,12 @@ interface MemoryInspectorProps {
   edges: MemoryEdge[];
   nodes: MemoryNode[];
   profiles: MemoryProfileInfo[];
+  graphView: MemoryGraphView;
   onFocus: (id: string) => void;
   onMemoryChanged: () => Promise<void> | void;
 }
 
-export function MemoryInspector({ node, edges, nodes, profiles, onFocus, onMemoryChanged }: MemoryInspectorProps) {
+export function MemoryInspector({ node, edges, nodes, profiles, graphView, onFocus, onMemoryChanged }: MemoryInspectorProps) {
   const related = useMemo(() => {
     if (!node) return [];
     const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -37,9 +38,13 @@ export function MemoryInspector({ node, edges, nodes, profiles, onFocus, onMemor
     );
   }
 
-  const content = metadataString(node.metadata?.content || node.summary || "");
+  const exactContent = metadataString(node.metadata?.content || "");
+  const fallbackContent = metadataString(node.summary || "");
+  const content = exactContent || fallbackContent;
   const path = metadataString(node.metadata?.path || node.metadata?.relative_path || "");
   const profile = metadataString(node.metadata?.profile || "");
+  const provenance = provenanceRows(node.metadata?.provenance);
+  const isStoredContentView = graphView === "stored_content";
   const isHermesEntry = node.kind === "hermes_user_entry" || node.kind === "hermes_memory_entry";
   const isWikiPage = node.kind === "wiki_page" || node.kind === "wiki_raw_source";
   const isHonchoNode = node.source === "honcho";
@@ -61,11 +66,41 @@ export function MemoryInspector({ node, edges, nodes, profiles, onFocus, onMemor
         {profile && <InfoRow icon={<Users className="h-3.5 w-3.5" />} label="Profile" value={profile} />}
         {path && <InfoRow icon={<FileText className="h-3.5 w-3.5" />} label="Path" value={path} mono />}
 
+        {isStoredContentView && (
+          <section className="mt-4 rounded border border-midground/25 bg-midground/5 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-xs uppercase tracking-widest text-foreground/55">Exact stored content</h3>
+              <Badge tone="secondary" className="text-[0.65rem]">raw record</Badge>
+            </div>
+            {exactContent ? (
+              <pre className="max-h-80 whitespace-pre-wrap rounded border border-current/10 bg-background/65 p-3 font-mono text-xs leading-relaxed text-foreground/80">{exactContent}</pre>
+            ) : (
+              <p className="rounded border border-warning/25 bg-warning/10 p-2 text-xs text-warning">
+                This stored-content node has no metadata.content payload; the title and summary above are the available stored fields.
+              </p>
+            )}
+            <div className="mt-2 text-[0.68rem] text-foreground/40">
+              Shown verbatim from the storage backend. No summaries, entity extraction, or analysis are applied here.
+            </div>
+          </section>
+        )}
+
+        {isStoredContentView && provenance.length > 0 && (
+          <section className="mt-3 rounded border border-current/10 bg-current/5 p-3">
+            <h3 className="mb-2 text-xs uppercase tracking-widest text-foreground/40">Storage provenance</h3>
+            <div className="space-y-1.5">
+              {provenance.map(([label, value]) => (
+                <InfoRow key={label} icon={<Database className="h-3.5 w-3.5" />} label={label} value={value} mono={label === "Path" || label === "ID" || label === "Peer ID"} />
+              ))}
+            </div>
+          </section>
+        )}
+
         {isHermesEntry && <HermesMemoryEditor node={node} profiles={profiles} onChanged={onMemoryChanged} />}
         {isWikiPage && <WikiPageEditor node={node} onChanged={onMemoryChanged} />}
         {isHonchoNode && <HonchoInspector node={node} onChanged={onMemoryChanged} />}
 
-        {content && (
+        {!isStoredContentView && content && (
           <section className="mt-4">
             <h3 className="mb-2 text-xs uppercase tracking-widest text-foreground/40">Content</h3>
             <pre className="max-h-64 whitespace-pre-wrap rounded border border-current/10 bg-current/5 p-3 text-xs leading-relaxed text-foreground/75">{content}</pre>
@@ -102,4 +137,24 @@ function InfoRow({ icon, label, value, mono = false }: { icon: ReactNode; label:
       <div className={`break-words text-foreground/70 ${mono ? "font-mono" : ""}`}>{value}</div>
     </div>
   );
+}
+
+function provenanceRows(value: unknown): Array<[string, string]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const provenance = value as Record<string, unknown>;
+  const keys: Array<[string, string]> = [
+    ["Source", "source"],
+    ["Store", "store"],
+    ["Profile", "profile"],
+    ["Target", "target"],
+    ["Kind", "kind"],
+    ["Index", "index"],
+    ["Path", "path"],
+    ["Relative path", "relative_path"],
+    ["ID", "id"],
+    ["Peer ID", "peer_id"],
+  ];
+  return keys
+    .map(([label, key]) => [label, metadataString(provenance[key])] as [string, string])
+    .filter(([, rowValue]) => rowValue.length > 0);
 }

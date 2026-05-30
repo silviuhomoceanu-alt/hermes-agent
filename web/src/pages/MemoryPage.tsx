@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { BrainCircuit, RefreshCw } from "lucide-react";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { usePageHeader } from "@/contexts/usePageHeader";
-import { api, type MemoryEdge, type MemoryGraphResponse, type MemoryProfileInfo, type MemorySearchResult } from "@/lib/api";
+import { api, type MemoryEdge, type MemoryGraphResponse, type MemoryGraphView, type MemoryProfileInfo, type MemorySearchResult } from "@/lib/api";
 import { MemoryGraph } from "@/components/memory/MemoryGraph";
 import { MemoryInspector } from "@/components/memory/MemoryInspector";
 import { MemorySearch } from "@/components/memory/MemorySearch";
@@ -26,6 +26,7 @@ export default function MemoryPage() {
   const [profiles, setProfiles] = useState<MemoryProfileInfo[]>([]);
   const [selectedProfile, setSelectedProfile] = useState("all");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [graphView, setGraphView] = useState<MemoryGraphView>("stored_content");
   const [mode, setMode] = useState<GraphMode>("global");
   const [densitySettings, setDensitySettings] = useState<GraphDensitySettings>(DEFAULT_DENSITY_SETTINGS);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -47,6 +48,7 @@ export default function MemoryPage() {
         includeMessages: densitySettings.includeMessages,
         includeRawSources: densitySettings.includeRawSources,
         includeDerivedEdges: densitySettings.includeDerivedEdges,
+        view: graphView,
       }),
     ])
       .then(([profileRes, graphRes]) => {
@@ -56,7 +58,7 @@ export default function MemoryPage() {
       })
       .catch((e: unknown) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [densitySettings.includeDerivedEdges, densitySettings.includeMessages, densitySettings.includeRawSources, selectedProfile]);
+  }, [densitySettings.includeDerivedEdges, densitySettings.includeMessages, densitySettings.includeRawSources, graphView, selectedProfile]);
 
   useEffect(() => {
     refresh();
@@ -144,6 +146,7 @@ export default function MemoryPage() {
     edges: graph?.edges ?? [],
     nodes: graph?.nodes ?? [],
     profiles,
+    graphView,
     onFocus: focusNode,
     onMemoryChanged: refresh,
   };
@@ -186,6 +189,8 @@ export default function MemoryPage() {
           onSelectedProfileChange={setSelectedProfile}
           sourceFilter={sourceFilter}
           onSourceFilterChange={setSourceFilter}
+          graphView={graphView}
+          onGraphViewChange={setGraphView}
           mode={mode}
           onModeChange={setMode}
           densitySettings={densitySettings}
@@ -197,6 +202,7 @@ export default function MemoryPage() {
 
         <MemoryGraph
           graphData={visibleGraph}
+          graphView={graphView}
           loading={loading}
           selectedNodeId={selectedNodeId}
           focusedNodeRevision={focusedNodeRevision}
