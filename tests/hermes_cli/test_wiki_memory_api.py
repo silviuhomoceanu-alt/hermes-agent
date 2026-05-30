@@ -91,6 +91,37 @@ def test_wiki_memory_lint_reports_expected_issues(tmp_path):
     assert lint["summary"]["warnings"] >= 2
 
 
+def test_wiki_memory_lint_reports_outside_root_symlinks_without_reading_target(monkeypatch, tmp_path):
+    root = tmp_path / ".hermes"
+    wiki = tmp_path / "wiki"
+    _fixture(root, wiki)
+    outside = tmp_path / "secret.md"
+    _write(outside, "secret outside content")
+    link = wiki / "concepts" / "outside-link.md"
+    link.symlink_to(outside)
+
+    original_read_text = Path.read_text
+
+    def guarded_read_text(self: Path, *args, **kwargs):
+        if self.resolve() == outside.resolve():
+            raise AssertionError("lint must not read outside-root symlink targets")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+
+    lint = WikiMemory(root=root).lint("default")
+    assert ("outside_root_page", "concepts/outside-link.md") in {(issue["kind"], issue["path"]) for issue in lint["issues"]}
+
+
+def test_wiki_memory_backlinks_rejects_missing_target(tmp_path):
+    root = tmp_path / ".hermes"
+    wiki = tmp_path / "wiki"
+    _fixture(root, wiki)
+
+    with pytest.raises(ValueError, match="Wiki page not found"):
+        WikiMemory(root=root).backlinks("default", "missing-page")
+
+
 def test_wiki_memory_dashboard_routes(monkeypatch, tmp_path):
     # Import inside the test so module-level route registration happens after the
     # direct WikiMemory tests above have no need for the heavy dashboard app.

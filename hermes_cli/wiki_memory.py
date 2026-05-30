@@ -88,7 +88,10 @@ class WikiMemory:
 
     def backlinks(self, profile: str = "default", path: str = "index.md") -> dict[str, Any]:
         profile_record, wiki_root = self._profile_and_root(profile)
-        target = self._read_page(self._resolve_page_path(wiki_root, path), wiki_root)
+        target_path = self._resolve_page_path(wiki_root, path)
+        if not target_path.is_file():
+            raise ValueError(f"Wiki page not found: {path}")
+        target = self._read_page(target_path, wiki_root)
         pages = self._pages(wiki_root)
         return {
             "profile": profile_record.name,
@@ -198,12 +201,14 @@ class WikiMemory:
         pages: list[WikiPageRecord] = []
         for path in sorted(wiki_root.rglob("*.md")):
             resolved = path.resolve()
-            if not include_outside and not self._is_under_root(resolved, wiki_root):
-                continue
             try:
                 rel = path.relative_to(wiki_root).as_posix()
             except ValueError:
                 rel = path.name
+            if not self._is_under_root(resolved, wiki_root):
+                if include_outside:
+                    pages.append(WikiPageRecord(path=resolved, rel=rel, frontmatter={}, body="", raw=""))
+                continue
             pages.append(self._read_page(path, wiki_root, rel_override=rel))
         return pages
 
